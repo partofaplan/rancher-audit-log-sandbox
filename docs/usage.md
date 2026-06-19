@@ -46,18 +46,37 @@ helm --kube-context rancher-desktop -n cattle-system upgrade rancher \
   --set auditLog.enabled=true --set auditLog.level=1
 ```
 
-## 3. Install the CRD and run the operator
+## 3. Build the operator image and deploy it
+
+The operator is a small container image — a static, cross-compiled binary on `scratch`
+(~17 MB). `build-image.sh` cross-compiles offline (from the Go module cache) and builds per
+platform, so an **amd64** image builds fine even on an arm64 Mac with no qemu:
 
 ```bash
-kubectl --context rancher-desktop apply -f operator/config/crd/bases
-
 cd operator
-make run          # runs the controller locally against the current kube-context (dev)
-# — or build an image and run it in-cluster: make docker-build docker-push deploy IMG=...
+IMG=rancher-audit-log-operator:0.1.0 PLATFORM=linux/amd64 ./build-image.sh
+# the image is also saved to operator/dist/<name>-amd64.tar (docker load / push elsewhere)
 ```
 
-`make run`/codegen use vendored `controller-gen`/`kustomize` in `operator/bin` + the module
-cache, so they work offline.
+Deploy it (CRD + RBAC + operator Deployment, namespace `rancher-audit-log-operator-system`):
+
+```bash
+# config/manager/kustomization.yaml already pins image -> rancher-audit-log-operator:0.1.0
+kubectl --context rancher-desktop apply -k config/default
+kubectl --context rancher-desktop -n rancher-audit-log-operator-system get pods
+```
+
+> For the **local** arm64 clusters, build the arm64 variant into the cluster's docker so it's
+> available without a registry:
+> `IMG=rancher-audit-log-operator:0.1.0 PLATFORM=linux/arm64 DOCKER_CONTEXT=rancher-desktop ./build-image.sh`
+>
+> For **another Rancher**, push to a registry and set the image:
+> `IMG=myreg/op:0.1.0 PLATFORM=linux/amd64,linux/arm64 PUSH=1 ./build-image.sh`, then
+> `cd config/manager && kustomize edit set image controller=myreg/op:0.1.0` before applying.
+
+For quick development without an image, run the controller locally instead:
+`kubectl apply -f config/crd/bases && make run` (codegen/kustomize tooling in `operator/bin`
++ the module cache work offline).
 
 ## 4. Apply an AuditLogConfig
 
@@ -81,6 +100,7 @@ Key spec fields (`operator/config/samples/...yaml`):
 | `spec.elasticsearch.pathPrefix` | base path when ES is behind a proxy | unset (use `/es` for bilbo) |
 | `spec.elasticsearch.index` | target index | `rancher-audit` |
 | `spec.elasticsearch.basicAuthSecretRef` | Secret (keys `username`/`password`) | unset |
+| `spec.elasticsearch.tls.caSecretRef` / `.insecureSkipVerify` | trust a private CA (Secret with `ca.crt`) / skip verification — for an existing HTTPS ELK | unset (public CA needs neither) |
 | `spec.source.namespace` / `podSelector` / `container` | what to tail | `cattle-system` / `app=rancher` / `rancher-audit-log` |
 | `spec.filebeat.image` | shipper image | `docker.elastic.co/beats/filebeat:8.17.3` |
 

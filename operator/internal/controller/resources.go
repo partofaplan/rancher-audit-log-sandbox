@@ -37,6 +37,7 @@ const (
 	defaultSourceContainer = "rancher-audit-log"
 	defaultFilebeatImage   = "docker.elastic.co/beats/filebeat:8.17.3"
 	defaultIndex           = "rancher-audit"
+	caMountPath            = "/etc/filebeat-ca"
 )
 
 // auditScriptJS runs in Filebeat's javascript processor. It derives, from the
@@ -165,6 +166,18 @@ func buildFilebeatConfig(cr *rancherauditv1alpha1.AuditLogConfig) (string, error
 	if es.BasicAuthSecretRef != "" {
 		esOut["username"] = "${ES_USERNAME}"
 		esOut["password"] = "${ES_PASSWORD}"
+	}
+	if es.TLS != nil {
+		ssl := map[string]interface{}{}
+		if es.TLS.InsecureSkipVerify {
+			ssl["verification_mode"] = "none"
+		}
+		if es.TLS.CASecretRef != "" {
+			ssl["certificate_authorities"] = []string{caMountPath + "/ca.crt"}
+		}
+		if len(ssl) > 0 {
+			esOut["ssl"] = ssl
+		}
 	}
 
 	cfg := map[string]interface{}{

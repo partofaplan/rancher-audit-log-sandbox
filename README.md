@@ -65,10 +65,49 @@ helm --kube-context rancher-desktop -n cattle-system upgrade rancher \
   --set auditLog.enabled=true --set auditLog.level=1
 
 # 3. Operator + CR on rancher-desktop
-kubectl --context rancher-desktop apply -f operator/config/crd/bases
-cd operator && make run            # dev; or `make deploy` for in-cluster
+cd operator
+./build-image.sh                                          # build the operator image (amd64)
+kubectl --context rancher-desktop apply -k config/default # CRD + RBAC + operator Deployment
 kubectl --context rancher-desktop apply -f config/samples/rancheraudit_v1alpha1_auditlogconfig.yaml
+# (for development you can skip the image and run the controller locally with `make run`)
 ```
+
+## Operator image & deploying to another Rancher
+
+The operator ships as a small container image (~17 MB, `scratch` + a static, cross-compiled
+binary). [operator/build-image.sh](operator/build-image.sh) cross-compiles offline and builds
+per-platform:
+
+```bash
+cd operator
+IMG=rancher-audit-log-operator:0.1.0 PLATFORM=linux/amd64 ./build-image.sh   # amd64 (default)
+# multi-arch + push to your registry:
+IMG=myregistry.example.com/rancher-audit-log-operator:0.1.0 \
+  PLATFORM=linux/amd64,linux/arm64 PUSH=1 ./build-image.sh
+```
+
+Deploy to **any** Rancher cluster (the operator watches all namespaces):
+
+```bash
+cd operator/config/manager && kustomize edit set image controller=<your-image>   # or edit kustomization.yaml
+kubectl apply -k operator/config/default
+```
+
+Then point an `AuditLogConfig` at your **existing ELK** — host, basic auth, and TLS (private
+CA or skip-verify) are all supported. See
+[operator/config/samples/external-elasticsearch.yaml](operator/config/samples/external-elasticsearch.yaml):
+
+```yaml
+spec:
+  elasticsearch:
+    host: https://elasticsearch.example.com:9200
+    index: rancher-audit
+    basicAuthSecretRef: elastic-credentials   # Secret with username/password
+    tls:
+      caSecretRef: elastic-ca                 # Secret with ca.crt (or insecureSkipVerify: true)
+```
+
+(Audit logging must be enabled on that cluster's Rancher first — step 2 / [docs/enable-rancher-audit.md](docs/enable-rancher-audit.md).)
 
 Open **http://kibana.localhost** → Dashboards → **Rancher Audit Overview** (events over time,
 breakdown by category, top actions, top users, translated event sentences, and raw log

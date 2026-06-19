@@ -198,6 +198,15 @@ func mutateDaemonSet(cr *rancherauditv1alpha1.AuditLogConfig, saName, cmName, cf
 		)
 	}
 
+	// Mount a CA bundle for verifying an existing/secured Elasticsearch, if configured.
+	caVolumes := []corev1.Volume{}
+	if tls := cr.Spec.Elasticsearch.TLS; tls != nil && tls.CASecretRef != "" {
+		container.VolumeMounts = append(container.VolumeMounts,
+			corev1.VolumeMount{Name: "es-ca", MountPath: caMountPath, ReadOnly: true})
+		caVolumes = append(caVolumes, corev1.Volume{Name: "es-ca", VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{SecretName: tls.CASecretRef}}})
+	}
+
 	ds.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels(cr)}
 	ds.Spec.Template = corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
@@ -223,6 +232,7 @@ func mutateDaemonSet(cr *rancherauditv1alpha1.AuditLogConfig, saName, cmName, cf
 			},
 		},
 	}
+	ds.Spec.Template.Spec.Volumes = append(ds.Spec.Template.Spec.Volumes, caVolumes...)
 }
 
 // cleanupClusterRBAC removes the cluster-scoped ClusterRole/ClusterRoleBinding, which

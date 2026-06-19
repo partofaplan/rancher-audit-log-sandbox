@@ -75,6 +75,22 @@ spec:
                       PathPrefix is the base path when ES sits behind a reverse proxy, e.g. /es
                       (bilbo exposes ES under a stripped /es prefix). Optional.
                     type: string
+                  tls:
+                    description: |-
+                      TLS configures HTTPS to Elasticsearch (for an existing/secured ELK). Optional;
+                      with a publicly-trusted cert no TLS config is needed.
+                    properties:
+                      caSecretRef:
+                        description: |-
+                          CASecretRef names a Secret (same namespace as the CR) with a "ca.crt" key holding
+                          the CA bundle to trust. Mounted into the shipper and used to verify Elasticsearch.
+                        type: string
+                      insecureSkipVerify:
+                        description: |-
+                          InsecureSkipVerify disables server certificate verification (sandbox/self-signed
+                          only — prefer caSecretRef).
+                        type: boolean
+                    type: object
                 required:
                 - host
                 type: object

@@ -1,0 +1,48 @@
+# Plug the operator into an EXISTING (secured) Elasticsearch / ELK stack.
+# Replace the host, credentials, and CA with your stack's real values.
+#
+# TLS options (spec.elasticsearch.tls):
+#   - public/trusted cert  -> omit `tls` entirely
+#   - private CA           -> set `caSecretRef` to a Secret with a `ca.crt` key
+#   - skip verification    -> set `insecureSkipVerify: true` (sandbox/self-signed only)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: elastic-credentials
+  namespace: default
+type: Opaque
+stringData:
+  username: elastic
+  password: "CHANGE-ME"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: elastic-ca
+  namespace: default
+type: Opaque
+stringData:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    REPLACE-WITH-YOUR-ELASTICSEARCH-CA-BUNDLE
+    -----END CERTIFICATE-----
+---
+apiVersion: rancheraudit.io/v1alpha1
+kind: AuditLogConfig
+metadata:
+  name: rancher-audit-external
+  namespace: default
+spec:
+  elasticsearch:
+    host: https://elasticsearch.example.com:9200
+    index: rancher-audit
+    basicAuthSecretRef: elastic-credentials
+    tls:
+      caSecretRef: elastic-ca
+  source:
+    namespace: cattle-system
+    podSelector:
+      app: rancher
+    container: rancher-audit-log
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.17.3

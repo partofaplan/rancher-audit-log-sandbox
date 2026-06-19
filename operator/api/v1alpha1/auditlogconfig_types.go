@@ -63,6 +63,24 @@ type ElasticsearchSpec struct {
 	// "username" and "password" for Elasticsearch basic auth. Optional.
 	// +optional
 	BasicAuthSecretRef string `json:"basicAuthSecretRef,omitempty"`
+
+	// TLS configures HTTPS to Elasticsearch (for an existing/secured ELK). Optional;
+	// with a publicly-trusted cert no TLS config is needed.
+	// +optional
+	TLS *ElasticsearchTLS `json:"tls,omitempty"`
+}
+
+// ElasticsearchTLS configures TLS verification for the Elasticsearch output.
+type ElasticsearchTLS struct {
+	// InsecureSkipVerify disables server certificate verification (sandbox/self-signed
+	// only — prefer caSecretRef).
+	// +optional
+	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
+
+	// CASecretRef names a Secret (same namespace as the CR) with a "ca.crt" key holding
+	// the CA bundle to trust. Mounted into the shipper and used to verify Elasticsearch.
+	// +optional
+	CASecretRef string `json:"caSecretRef,omitempty"`
 }
 
 // SourceSpec selects the audit-log source pods/container.
