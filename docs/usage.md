@@ -95,9 +95,23 @@ Key spec fields (`operator/config/samples/...yaml`):
 ## 5. Verify in Kibana
 
 Generate activity by clicking around the Rancher UI, then open **http://kibana.localhost**
-→ Discover → saved search **Rancher Audit Events**. Each row shows the enriched fields, with
-`audit.summary` reading like a sentence — e.g. `zperkins create deployments monitoring/web`,
-`admin update ingresses monitoring/grafana`, `admin delete pods default/foo`.
+→ Dashboards → **Rancher Audit Overview**. The dashboard (imported by `setup-kibana.sh` from
+`bilbo/elk/kibana-objects.ndjson`) has:
+
+| Panel | What it shows |
+|-------|---------------|
+| Audit events over time | volume by action (stacked date histogram) |
+| Events by category | `audit.category` donut — workload / rbac / networking / config / auth / cluster / catalog / system |
+| Events by action | `audit.verb` donut — create / update / delete / get / invoke |
+| Top users | `audit.actor` (local login name) by event count |
+| Top events | `audit.event` (verb + resource) by count |
+| Rancher Audit Events | **translated sentences** — `audit.summary` per event, e.g. `zperkins delete pods default/web` |
+| Rancher Audit Raw Log | the raw audit JSON (`message` + key `rancher.*` fields) |
+
+`audit.summary` reads like a sentence — e.g. `zperkins create deployments monitoring/web`,
+`admin update ingresses monitoring/grafana`, `admin delete pods default/foo`. The standalone
+saved searches (**Rancher Audit Events**, **Rancher Audit Raw Log**) are also available under
+Discover.
 
 Filter with KQL, e.g. only changes by a user:
 

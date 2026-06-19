@@ -70,7 +70,8 @@ cd operator && make run            # dev; or `make deploy` for in-cluster
 kubectl --context rancher-desktop apply -f config/samples/rancheraudit_v1alpha1_auditlogconfig.yaml
 ```
 
-Open **http://kibana.localhost** → Discover → saved search **Rancher Audit Events**, or query
-Elasticsearch directly: `curl http://localhost/es/rancher-audit/_search`.
+Open **http://kibana.localhost** → Dashboards → **Rancher Audit Overview** (events over time,
+breakdown by category, top actions, top users, translated event sentences, and raw log
+output), or query Elasticsearch directly: `curl http://localhost/es/rancher-audit/_search`.
 
 See [docs/usage.md](docs/usage.md) for the full walkthrough and verification steps.
