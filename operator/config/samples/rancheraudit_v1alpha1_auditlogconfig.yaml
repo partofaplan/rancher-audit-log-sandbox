@@ -1,0 +1,14 @@
+apiVersion: rancheraudit.io/v1alpha1
+kind: AuditLogConfig
+metadata:
+  name: default-audit-log-config
+  namespace: default
+spec:
+  loki:
+    url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+    tenant: ""
+  forwarder:
+    image: rancher-audit-log-operator:latest
+    replicas: 1
+  auditLevels:
+    - RequestResponse

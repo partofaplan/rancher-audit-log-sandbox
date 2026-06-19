@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auditlog-operator
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      control-plane: auditlog-operator
+  template:
+    metadata:
+      labels:
+        control-plane: auditlog-operator
+    spec:
+      serviceAccountName: auditlog-operator
+      containers:
+        - name: manager
+          image: rancher-audit-log-operator:latest
+          command:
+            - /manager
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - containerPort: 8080
+              name: metrics
+            - containerPort: 8081
+              name: health

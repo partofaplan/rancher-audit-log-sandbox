@@ -1,0 +1,20 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Binary and build outputs
+bin/
+_build/
+
+# Kubernetes manifests are included in the repo.
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store

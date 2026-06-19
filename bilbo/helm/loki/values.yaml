@@ -1,0 +1,21 @@
+persistence:
+  enabled: true
+  size: 10Gi
+  accessModes:
+    - ReadWriteOnce
+
+resources:
+  requests:
+    memory: 1Gi
+    cpu: 500m
+
+service:
+  type: ClusterIP
+
+loki:
+  persistence:
+    enabled: true
+    size: 10Gi
+
+ingester:
+  replicaCount: 1
