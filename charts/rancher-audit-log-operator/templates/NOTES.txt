@@ -1,0 +1,19 @@
+{{ .Chart.Name }} {{ .Chart.Version }} installed into namespace "{{ .Release.Namespace }}".
+
+Operator image:  {{ include "operator.image" . }}
+Filebeat image:  {{ include "operator.filebeatImage" . }}
+
+{{- if .Values.auditLogConfig.create }}
+AuditLogConfig "{{ .Values.auditLogConfig.name }}" → Elasticsearch {{ .Values.elasticsearch.host }}{{ .Values.elasticsearch.pathPrefix }} (index "{{ .Values.elasticsearch.index }}")
+
+Check status:
+  kubectl -n {{ .Release.Namespace }} get auditlogconfig {{ .Values.auditLogConfig.name }}
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Values.auditLogConfig.name }}
+  kubectl -n {{ .Release.Namespace }} logs ds/audit-shipper-{{ .Values.auditLogConfig.name }} | grep "Harvester started"
+{{- else }}
+auditLogConfig.create=false — create an AuditLogConfig yourself to start shipping.
+{{- end }}
+
+Reminder: Rancher audit logging must be ENABLED on this cluster's Rancher server
+(auditLog.enabled=true, auditLog.level=1) — see docs/enable-rancher-audit.md.
+The ELK team must apply the index template + dashboard — see elk-integration/.

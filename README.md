@@ -42,20 +42,30 @@ Two facts that shaped this design:
 > This repo previously used Loki + Grafana + Grafana Alloy; it was refactored to the ELK
 > stack (Elasticsearch + Kibana + Filebeat). See git history for the Loki/Grafana version.
 
+This repo serves two purposes: a **local sandbox** (stand the whole thing up on two k3d/
+Rancher-Desktop clusters to develop and demo — the diagram above), and a **production
+deployment** into an air-gapped Rancher cluster that ships to an Elasticsearch run by another
+team. The production path is the Helm chart + the two handoff packages below.
+
 ## Layout
 
-- `bilbo/` — manifests + install script for the ELK backend.
-  - `bilbo/elk/{elasticsearch,kibana,ingress}.yaml`, `bilbo/elk/setup-kibana.sh`,
-    [bilbo/install.sh](bilbo/install.sh).
-- `operator/` — Kubebuilder operator (`rancheraudit.io/v1alpha1`, kind `AuditLogConfig`)
-  that reconciles a Filebeat shipper from a CR.
-- `docs/` — [usage.md](docs/usage.md) (end-to-end run) and
-  [enable-rancher-audit.md](docs/enable-rancher-audit.md) (turning on Rancher auditing).
+- `operator/` — Kubebuilder operator (`rancheraudit.io/v1alpha1`, kind `AuditLogConfig`) that
+  reconciles a Filebeat shipper from a CR. Image built by
+  [operator/build-image.sh](operator/build-image.sh).
+- `charts/rancher-audit-log-operator/` — **Helm chart** to deploy the operator (registry
+  prefix, ELK endpoint/auth/TLS, AuditLogConfig). The production deploy unit.
+- `elk-integration/` — **handoff package for the ELK team**: index template, shipper role,
+  the Kibana dashboard bundle, and [ELK-INTEGRATION.md](elk-integration/ELK-INTEGRATION.md).
+- `docs/` — [usage.md](docs/usage.md) (sandbox walkthrough),
+  [air-gap.md](docs/air-gap.md) (mirror images + chart install),
+  [enable-rancher-audit.md](docs/enable-rancher-audit.md) (turn on Rancher auditing).
+- `bilbo/` — **local sandbox only**: a throwaway Elasticsearch+Kibana on k3d plus an install
+  script. Not used in production (the real ELK is external).
 
-## Quick start
+## Quick start (local sandbox)
 
 ```bash
-# 1. ELK backend on bilbo (Elasticsearch + Kibana + data view/saved search)
+# 1. Sandbox ELK on bilbo (Elasticsearch + Kibana + index template + dashboard)
 ./bilbo/install.sh
 echo "127.0.0.1  kibana.localhost" | sudo tee -a /etc/hosts   # for the Kibana UI
 
@@ -64,94 +74,63 @@ helm --kube-context rancher-desktop -n cattle-system upgrade rancher \
   rancher-latest/rancher --version 2.13.1 --reuse-values \
   --set auditLog.enabled=true --set auditLog.level=1
 
-# 3. Operator + CR on rancher-desktop
-cd operator
-./build-image.sh                                          # build the operator image (amd64)
-kubectl --context rancher-desktop apply -k config/default # CRD + RBAC + operator Deployment
-kubectl --context rancher-desktop apply -f config/samples/rancheraudit_v1alpha1_auditlogconfig.yaml
-# (for development you can skip the image and run the controller locally with `make run`)
+# 3. Build the operator image, then install the chart pointed at the sandbox ES
+cd operator && ./build-image.sh \
+  && IMG=rancher-audit-log-operator:0.1.0 PLATFORM=linux/arm64 DOCKER_CONTEXT=rancher-desktop ./build-image.sh
+helm --kube-context rancher-desktop install rancher-audit charts/rancher-audit-log-operator \
+  -n rancher-audit-system --create-namespace \
+  --set elasticsearch.host=http://192.168.5.2:80 --set elasticsearch.pathPrefix=/es
+# (for quick controller-only dev: kubectl apply -f operator/config/crd/bases && cd operator && make run)
 ```
 
-## Operator image & deploying to another Rancher
+## Production: air-gapped Rancher + external ELK
 
-The operator ships as a small container image (~17 MB, `scratch` + a static, cross-compiled
-binary). [operator/build-image.sh](operator/build-image.sh) cross-compiles offline and builds
-per-platform:
+In production this splits across **two teams**, with a small contract between them:
+
+```
+  YOUR side (Rancher / operator)                    ELK TEAM's side (Elasticsearch + Kibana)
+  ┌─────────────────────────────────┐               ┌──────────────────────────────────────┐
+  │ air-gapped Rancher cluster      │   ships to     │ index template (audit.* mappings)      │
+  │ Helm chart → operator → Filebeat├──────────────▶ │ shipper role / API key                 │
+  │ images from internal registry   │  contract:     │ "Rancher Audit Overview" dashboard     │
+  └─────────────────────────────────┘  endpoint,     └──────────────────────────────────────┘
+                                        index, creds, CA, network egress
+```
+
+### Your side — deploy the operator (air-gapped)
+
+The operator is a ~17 MB `scratch` image (static, cross-compiled binary), so it's just
+load-and-push. Mirror **two** images into your internal registry — the operator and the
+Filebeat shipper — then install the chart with a single registry prefix. Full steps:
+[docs/air-gap.md](docs/air-gap.md). In short:
 
 ```bash
-cd operator
-IMG=rancher-audit-log-operator:0.1.0 PLATFORM=linux/amd64 ./build-image.sh   # amd64 (default)
-# multi-arch + push to your registry:
-IMG=myregistry.example.com/rancher-audit-log-operator:0.1.0 \
-  PLATFORM=linux/amd64,linux/arm64 PUSH=1 ./build-image.sh
+cd operator && IMG=rancher-audit-log-operator:0.1.0 PLATFORM=linux/amd64 ./build-image.sh
+# mirror operator/dist/...amd64.tar and docker.elastic.co/beats/filebeat:8.17.3 into <REG>, then:
+helm install rancher-audit charts/rancher-audit-log-operator -n rancher-audit-system --create-namespace \
+  --set image.registry=<REG> --set imagePullSecrets[0].name=internal-registry \
+  --set elasticsearch.host=https://es.corp.example:9200 \
+  --set elasticsearch.auth.existingSecret=es-creds \
+  --set elasticsearch.tls.existingCASecret=es-ca
 ```
 
-Deploy to **any** Rancher cluster (the operator watches all namespaces):
+`image.registry` prefixes **both** images. The ES endpoint, credentials, and CA come from the
+ELK team (below). Audit logging must be enabled on that cluster's Rancher first
+([docs/enable-rancher-audit.md](docs/enable-rancher-audit.md)). See
+[charts/rancher-audit-log-operator/values.yaml](charts/rancher-audit-log-operator/values.yaml)
+for every option (basic auth, inline creds, `insecureSkipVerify`, source pod selector, …).
 
-```bash
-cd operator/config/manager && kustomize edit set image controller=<your-image>   # or edit kustomization.yaml
-kubectl apply -k operator/config/default
-```
+### ELK team's side — onboard the data + dashboard
 
-Then point an `AuditLogConfig` at your **existing ELK** — host, basic auth, and TLS (private
-CA or skip-verify) are all supported. See
-[operator/config/samples/external-elasticsearch.yaml](operator/config/samples/external-elasticsearch.yaml):
+Hand the ELK team the [elk-integration/](elk-integration/) folder — it's self-contained.
+[ELK-INTEGRATION.md](elk-integration/ELK-INTEGRATION.md) walks them through: allow the network
+path, apply the **index template** (`index-template.json` → `audit.*` mapped as keyword/date),
+create a least-privilege **shipper credential** (`shipper-role.json` → API key/user, returned
+to your side), and import the **dashboard** (`rancher-audit-dashboard.ndjson`) — events over
+time, breakdown by category, top actions/users, translated event sentences, and raw log output.
 
-```yaml
-spec:
-  elasticsearch:
-    host: https://elasticsearch.example.com:9200
-    index: rancher-audit
-    basicAuthSecretRef: elastic-credentials   # Secret with username/password
-    tls:
-      caSecretRef: elastic-ca                 # Secret with ca.crt (or insecureSkipVerify: true)
-```
+> The dashboard's data view is titled **`rancher-audit`** and must match the index the shipper
+> writes to (`elasticsearch.index`, default `rancher-audit`). The index template and dashboard
+> are a matched pair — apply the template before data flows so `audit.*` are keyword/date.
 
-(Audit logging must be enabled on that cluster's Rancher first — step 2 / [docs/enable-rancher-audit.md](docs/enable-rancher-audit.md).)
-
-## Installing the dashboard in another ELK / Kibana
-
-The dashboard, visualizations, data view, and saved searches are a portable Kibana
-**saved-objects bundle**: [bilbo/elk/kibana-objects.ndjson](bilbo/elk/kibana-objects.ndjson).
-You can load it into any Kibana 8.x — it's independent of where the operator runs.
-
-**Prerequisite:** the bundle's data view is titled **`rancher-audit`**, so it must match the
-index your shipper writes to (`spec.elasticsearch.index`, default `rancher-audit`). Use the
-same index name, or after importing rename the data view (Stack Management → Data Views) — the
-saved searches and dashboard reference it by id, so they follow automatically.
-
-### Option A — script (against any Kibana)
-
-[bilbo/elk/setup-kibana.sh](bilbo/elk/setup-kibana.sh) POSTs the bundle to Kibana's
-`saved_objects/_import` API (idempotent, `overwrite=true`). Point it at your Kibana, drop the
-local vhost header, and pass credentials — basic auth or an API key (create one under Kibana →
-Stack Management → API keys):
-
-```bash
-# basic auth
-KIBANA_URL=https://kibana.example.com KIBANA_HOST= \
-  KIBANA_USER=elastic KIBANA_PASS='…' ./bilbo/elk/setup-kibana.sh
-
-# API key
-KIBANA_URL=https://kibana.example.com KIBANA_HOST= \
-  KIBANA_APIKEY='<base64 id:api_key>' ./bilbo/elk/setup-kibana.sh
-```
-
-(`KIBANA_HOST=` clears the `kibana.localhost` Host header used only for the local Traefik
-setup. If Kibana is served under a base path, include it in `KIBANA_URL`,
-e.g. `https://host/kibana`.)
-
-### Option B — Kibana UI
-
-Stack Management → **Saved Objects** → **Import** → choose `kibana-objects.ndjson` →
-enable "Automatically overwrite conflicts" → Import.
-
-Either way, then open **Dashboards → Rancher Audit Overview**. To re-export after editing it in
-the UI: Stack Management → Saved Objects → select the objects → Export (keep "include related"),
-and replace `bilbo/elk/kibana-objects.ndjson`.
-
-Open **http://kibana.localhost** → Dashboards → **Rancher Audit Overview** (events over time,
-breakdown by category, top actions, top users, translated event sentences, and raw log
-output), or query Elasticsearch directly: `curl http://localhost/es/rancher-audit/_search`.
-
-See [docs/usage.md](docs/usage.md) for the full walkthrough and verification steps.
+See [docs/usage.md](docs/usage.md) for the full sandbox walkthrough and verification steps.

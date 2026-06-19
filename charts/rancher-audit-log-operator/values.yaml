@@ -1,0 +1,60 @@
+# ── Images ──────────────────────────────────────────────────────────────────────────────
+# Single internal-registry prefix prepended to BOTH the operator and Filebeat images.
+# In an air-gapped cluster set this to your registry (e.g. registry.internal/rancher-audit)
+# after mirroring the images there (see the chart README / docs/air-gap.md).
+# Leave empty to use the repositories as-is (e.g. a locally pre-loaded operator image).
+image:
+  registry: ""
+  # Operator image (built from this repo via operator/build-image.sh)
+  repository: rancher-audit-log-operator
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# Filebeat shipper image, reconciled into the AuditLogConfig. Path is appended to
+# image.registry (full ref = <registry>/<repository>:<tag>). Set filebeat.image to a full
+# reference to bypass the registry prefix entirely.
+filebeat:
+  repository: beats/filebeat
+  tag: "8.17.3"
+  image: ""           # optional full override, e.g. registry.internal/beats/filebeat:8.17.3
+  resources: {}
+
+# Pull secret(s) for the internal registry, e.g. [{ name: internal-registry }]
+imagePullSecrets: []
+
+# ── Operator deployment ─────────────────────────────────────────────────────────────────
+replicaCount: 1
+leaderElect: true
+resources:
+  limits: { cpu: 500m, memory: 128Mi }
+  requests: { cpu: 10m, memory: 64Mi }
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ── Source: which Rancher pods/container produce the audit JSON ───────────────────────────
+source:
+  namespace: cattle-system
+  podSelector:
+    app: rancher
+  container: rancher-audit-log
+
+# ── Connection to the EXISTING Elasticsearch (run by the ELK team) ────────────────────────
+elasticsearch:
+  host: ""              # REQUIRED, e.g. https://elasticsearch.example.com:9200
+  pathPrefix: ""        # e.g. /es when ES sits behind a path-based reverse proxy
+  index: rancher-audit
+  auth:
+    existingSecret: ""  # name of a Secret with keys username/password (preferred)
+    username: ""        # OR inline creds — the chart will create the Secret
+    password: ""
+  tls:
+    insecureSkipVerify: false
+    existingCASecret: ""  # name of a Secret with key ca.crt
+    caCert: ""            # OR inline PEM — the chart will create the Secret
+
+# ── AuditLogConfig CR ─────────────────────────────────────────────────────────────────────
+# Create the CR as part of the release. Set create=false to manage it out-of-band.
+auditLogConfig:
+  create: true
+  name: rancher-audit

@@ -1,0 +1,42 @@
+{{- if .Values.auditLogConfig.create }}
+{{- if not .Values.elasticsearch.host }}
+{{- fail "elasticsearch.host is required when auditLogConfig.create=true (point it at the ELK team's Elasticsearch endpoint)" }}
+{{- end }}
+apiVersion: rancheraudit.io/v1alpha1
+kind: AuditLogConfig
+metadata:
+  name: {{ .Values.auditLogConfig.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "operator.labels" . | nindent 4 }}
+spec:
+  elasticsearch:
+    host: {{ .Values.elasticsearch.host | quote }}
+    {{- with .Values.elasticsearch.pathPrefix }}
+    pathPrefix: {{ . | quote }}
+    {{- end }}
+    index: {{ .Values.elasticsearch.index | quote }}
+    {{- if or .Values.elasticsearch.auth.existingSecret .Values.elasticsearch.auth.username }}
+    basicAuthSecretRef: {{ include "operator.authSecretName" . }}
+    {{- end }}
+    {{- if or .Values.elasticsearch.tls.insecureSkipVerify .Values.elasticsearch.tls.existingCASecret .Values.elasticsearch.tls.caCert }}
+    tls:
+      {{- if .Values.elasticsearch.tls.insecureSkipVerify }}
+      insecureSkipVerify: true
+      {{- end }}
+      {{- if or .Values.elasticsearch.tls.existingCASecret .Values.elasticsearch.tls.caCert }}
+      caSecretRef: {{ include "operator.caSecretName" . }}
+      {{- end }}
+    {{- end }}
+  source:
+    namespace: {{ .Values.source.namespace | quote }}
+    podSelector:
+      {{- toYaml .Values.source.podSelector | nindent 6 }}
+    container: {{ .Values.source.container | quote }}
+  filebeat:
+    image: {{ include "operator.filebeatImage" . | quote }}
+    {{- with .Values.filebeat.resources }}
+    resources:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}

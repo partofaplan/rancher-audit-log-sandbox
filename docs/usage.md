@@ -156,9 +156,10 @@ curl -s http://localhost/es/rancher-audit/_search -H 'Content-Type: application/
 The decoded Rancher JSON is kept under `rancher.*` (e.g. `rancher.requestURI`,
 `rancher.user.name`, `rancher.responseCode`) for full detail alongside the `audit.*` summary.
 
-To load this same dashboard into a **different** Kibana (e.g. an existing ELK), import
-`bilbo/elk/kibana-objects.ndjson` there — via `setup-kibana.sh` (with `KIBANA_URL` + auth) or
-the Kibana UI. See the README's "Installing the dashboard in another ELK / Kibana".
+To load this same dashboard into a **different** Kibana (e.g. an existing/production ELK), the
+ELK team imports `elk-integration/rancher-audit-dashboard.ndjson` — see
+[../elk-integration/ELK-INTEGRATION.md](../elk-integration/ELK-INTEGRATION.md) (which also
+covers the index template and the shipper credential).
 
 ## Teardown
 

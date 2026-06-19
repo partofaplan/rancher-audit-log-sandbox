@@ -1,0 +1,19 @@
+apiVersion: v2
+name: rancher-audit-log-operator
+description: |
+  Exports Rancher UI/API audit logs to an existing Elasticsearch (ELK) stack. Installs the
+  AuditLogConfig CRD + operator; the operator reconciles a Filebeat shipper that tails the
+  Rancher audit-log sidecar and ships enriched audit events to Elasticsearch. Designed for
+  air-gapped Rancher clusters with an internal image/chart registry.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - rancher
+  - audit
+  - elasticsearch
+  - elk
+  - filebeat
+home: https://github.com/zachperkins/rancher-audit-log-sandbox
+maintainers:
+  - name: Zach Perkins

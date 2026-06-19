@@ -25,10 +25,16 @@ kubectl --context "${CONTEXT}" -n "${NS}" rollout status deploy/elasticsearch --
 echo ">> Waiting for Kibana (first boot can take a couple minutes)..."
 kubectl --context "${CONTEXT}" -n "${NS}" rollout status deploy/kibana --timeout=420s || true
 
-echo ">> Setting up Kibana data view + saved search"
+echo ">> Applying the Rancher audit index template (same one the ELK team applies)"
+curl -fsS -X PUT "http://localhost/es/_index_template/rancher-audit" \
+  -H 'Content-Type: application/json' \
+  --data-binary @"${HERE}/../elk-integration/index-template.json" >/dev/null \
+  && echo "   index template applied" || echo "   (could not apply template; is ES reachable on http://localhost/es?)"
+
+echo ">> Setting up Kibana dashboard (from elk-integration/)"
 "${HERE}/elk/setup-kibana.sh" || echo "   (Kibana not ready yet — re-run ./bilbo/elk/setup-kibana.sh later)"
 
 echo ">> Done."
 echo ">> Kibana:        http://kibana.localhost   (add '127.0.0.1 kibana.localhost' to /etc/hosts)"
-echo ">>                Discover -> saved search 'Rancher Audit Events'"
+echo ">>                Dashboards -> 'Rancher Audit Overview'"
 echo ">> Elasticsearch (from the Mac host): http://localhost/es/_cluster/health"

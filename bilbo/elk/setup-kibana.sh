@@ -18,7 +18,8 @@ set -euo pipefail
 BASE="${KIBANA_URL:-http://localhost}"
 HOSTHDR="${KIBANA_HOST-kibana.localhost}"   # set KIBANA_HOST= (empty) for a real DNS host
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NDJSON="${HERE}/kibana-objects.ndjson"
+# Single source of truth for the dashboard is the ELK-team handoff bundle.
+NDJSON="${KIBANA_NDJSON:-${HERE}/../../elk-integration/rancher-audit-dashboard.ndjson}"
 
 ARGS=(-fsS -H "kbn-xsrf: true")
 [ -n "${HOSTHDR}" ] && ARGS+=(-H "Host: ${HOSTHDR}")

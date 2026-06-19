@@ -1,0 +1,9 @@
+{
+  "cluster": ["monitor"],
+  "indices": [
+    {
+      "names": ["rancher-audit*"],
+      "privileges": ["auto_configure", "create_index", "create", "index", "view_index_metadata"]
+    }
+  ]
+}
