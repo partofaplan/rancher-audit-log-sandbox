@@ -61,7 +61,7 @@ const auditScriptJS = `function process(event) {
     if (method === "POST" && rawuri.indexOf("action=") >= 0) { verb = "invoke"; }
 
     var uri = rawuri.split("?")[0];
-    var tail = uri.replace(/^.*\/v[0-9]+[a-z0-9]*(-public)?\//, "");
+    var tail = uri.replace(/^.*\/v[0-9]+[a-z0-9]*(-public)?\//, "").replace(/^\//, "");
     var rtype = tail.split("/")[0];
     var dot = rtype.lastIndexOf(".");
     var kind = dot >= 0 ? rtype.substring(dot + 1) : rtype;

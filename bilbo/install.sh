@@ -25,6 +25,10 @@ kubectl --context "${CONTEXT}" -n "${NS}" rollout status deploy/elasticsearch --
 echo ">> Waiting for Kibana (first boot can take a couple minutes)..."
 kubectl --context "${CONTEXT}" -n "${NS}" rollout status deploy/kibana --timeout=420s || true
 
+echo ">> Setting up Kibana data view + saved search"
+"${HERE}/elk/setup-kibana.sh" || echo "   (Kibana not ready yet — re-run ./bilbo/elk/setup-kibana.sh later)"
+
 echo ">> Done."
 echo ">> Kibana:        http://kibana.localhost   (add '127.0.0.1 kibana.localhost' to /etc/hosts)"
+echo ">>                Discover -> saved search 'Rancher Audit Events'"
 echo ">> Elasticsearch (from the Mac host): http://localhost/es/_cluster/health"

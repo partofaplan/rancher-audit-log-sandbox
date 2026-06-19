@@ -9,7 +9,7 @@ server before there is anything to ship. This is a one-time setup step — the o
 When `auditLog.enabled=true`, the Rancher server writes JSON audit entries to
 `/var/log/auditlog/rancher-api-audit.log`. With `auditLog.destination=sidecar` (the chart
 default), the chart injects a shared `emptyDir` and a **`rancher-audit-log` sidecar** that
-tails that file to **stdout**, where Grafana Alloy can scrape it via the Kubernetes API.
+tails that file to **stdout**, where Filebeat can pick it up from the node's container logs.
 
 Audit levels: `0` metadata only · `1` + request/response headers · `2` + request body ·
 `3` + response body. This sandbox uses **level 1**.
@@ -52,7 +52,7 @@ A line looks like (level 1, headers included, secrets `[redacted]`):
  "requestHeader":{…},"responseHeader":{…}}
 ```
 
-Key fields the export pipeline and Grafana dashboard rely on: `user.name` (the human
+Key fields the export pipeline and Kibana saved search rely on: `user.name` (the human
 actor — for external IdPs this is the IdP username), `method` (the HTTP verb — Rancher has
 no separate `verb` field), `requestURI` (the resource), `responseCode`, and the timestamps.
 

@@ -1,48 +1,63 @@
 # Rancher Audit Log Sandbox
 
-Make **actions taken in the Rancher UI by any user** readable and queryable in Grafana.
+Make **actions taken in the Rancher UI by any user** readable and queryable in Kibana.
 
-A user clicks around the Rancher dashboard → Rancher writes API audit JSON → a Grafana
-Alloy shipper (managed by a small operator) tails it and pushes to Loki → you query
-"who did what, when" in Grafana.
+A user clicks around the Rancher dashboard → Rancher writes API audit JSON → a Filebeat
+shipper (managed by a small operator) tails it and ships to Elasticsearch → you explore
+"who did what, when" in Kibana as readable sentences.
 
 ## Architecture
 
 ```
 rancher-desktop (lima VM)                         bilbo / k3d-bilbo (Docker Desktop)
 ┌──────────────────────────────────┐              ┌───────────────────────────────┐
-│ cattle-system/rancher             │   push       │ monitoring/loki (single-binary)│
-│   rancher  (AUDIT_LEVEL=1)        │   over the   │ monitoring/grafana             │
-│   rancher-audit-log sidecar ──────┼──┐ Mac host   │   Loki datasource +            │
-│        (audit JSON → stdout)      │  │            │   "Rancher Audit" dashboard    │
-│                                   │  │ Alloy      │ exposed via Traefik:           │
-│ AuditLogConfig CR (rancheraudit.io)│  │ tails via  │   /loki  ·  grafana.localhost  │
-│ operator → Grafana Alloy Deploy ──┼──┘ K8s API,   └───────────────────────────────┘
-└──────────────────────────────────┘    labels & pushes → http://192.168.5.2/loki/api/v1/push
+│ cattle-system/rancher             │   ship       │ monitoring/elasticsearch       │
+│   rancher  (AUDIT_LEVEL=1)        │   over the   │   (single node, security off)  │
+│   rancher-audit-log sidecar ──────┼──┐ Mac host   │ monitoring/kibana              │
+│        (audit JSON → stdout)      │  │            │   data view + saved search     │
+│                                   │  │ Filebeat   │ exposed via Traefik:           │
+│ AuditLogConfig CR (rancheraudit.io)│  │ tails node │   /es  ·  kibana.localhost     │
+│ operator → Filebeat DaemonSet ────┼──┘ logs,      └───────────────────────────────┘
+└──────────────────────────────────┘    parses JSON, builds the sentence, ships →
+                                         http://192.168.5.2:80/es  (index: rancher-audit)
 ```
 
-Two important facts that shaped this design:
+Each audit entry is enriched at ingest into `audit.*` fields, including an
+`audit.summary` sentence like **`zperkins create deployments monitoring/web`**:
+
+- `audit.actor` — the Rancher local/login username (`user.extra.username`), falling back
+  to the principal (`user.name`), then `unknown`.
+- `audit.verb` — mapped from the HTTP method (POST→create, DELETE→delete, PUT/PATCH→
+  update, GET→get; POST with `?action=`→invoke).
+- `audit.resource` / `audit.target` — the kind and namespace/name parsed from `requestURI`.
+
+Two facts that shaped this design:
 
 - **Rancher UI audit logs are an application-level log**, not Kubernetes `kube-apiserver`
   audit. Rancher writes them to a file streamed to a `rancher-audit-log` sidecar's stdout.
-  (An earlier iteration used a Kubernetes `AuditSink` + webhook forwarder — that API was
-  removed in Kubernetes 1.19 and never carried Rancher UI events. It has been removed.)
-- **Promtail is end-of-life** (March 2026). The shipper is **Grafana Alloy**.
+- Because the rancher-desktop node runs **dockerd**, container logs live under
+  `/var/lib/docker/containers` (the `/var/log/pods/.../0.log` files symlink there), so the
+  Filebeat DaemonSet mounts that path too.
+
+> This repo previously used Loki + Grafana + Grafana Alloy; it was refactored to the ELK
+> stack (Elasticsearch + Kibana + Filebeat). See git history for the Loki/Grafana version.
 
 ## Layout
 
-- `bilbo/` — Helm values + install script for the Loki/Grafana backend, the Grafana
-  dashboard, and the Traefik ingress. See [bilbo/install.sh](bilbo/install.sh).
+- `bilbo/` — manifests + install script for the ELK backend.
+  - `bilbo/elk/{elasticsearch,kibana,ingress}.yaml`, `bilbo/elk/setup-kibana.sh`,
+    [bilbo/install.sh](bilbo/install.sh).
 - `operator/` — Kubebuilder operator (`rancheraudit.io/v1alpha1`, kind `AuditLogConfig`)
-  that reconciles a Grafana Alloy shipper from a CR.
+  that reconciles a Filebeat shipper from a CR.
 - `docs/` — [usage.md](docs/usage.md) (end-to-end run) and
   [enable-rancher-audit.md](docs/enable-rancher-audit.md) (turning on Rancher auditing).
 
 ## Quick start
 
 ```bash
-# 1. Backend on bilbo
-./bilbo/install.sh                       # Loki + Grafana + dashboard + ingress
+# 1. ELK backend on bilbo (Elasticsearch + Kibana + data view/saved search)
+./bilbo/install.sh
+echo "127.0.0.1  kibana.localhost" | sudo tee -a /etc/hosts   # for the Kibana UI
 
 # 2. Turn on Rancher audit logging on rancher-desktop (one-time) — see docs
 helm --kube-context rancher-desktop -n cattle-system upgrade rancher \
@@ -55,7 +70,7 @@ cd operator && make run            # dev; or `make deploy` for in-cluster
 kubectl --context rancher-desktop apply -f config/samples/rancheraudit_v1alpha1_auditlogconfig.yaml
 ```
 
-Open **http://grafana.localhost** (admin/admin) → dashboard **Rancher Audit**, or run
-`{job="rancher-audit"} | json | __error__="" | user_name="<user>"` in Explore.
+Open **http://kibana.localhost** → Discover → saved search **Rancher Audit Events**, or query
+Elasticsearch directly: `curl http://localhost/es/rancher-audit/_search`.
 
 See [docs/usage.md](docs/usage.md) for the full walkthrough and verification steps.
