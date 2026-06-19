@@ -102,11 +102,16 @@ func (r *AuditLogConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 // reconcileShipper creates/updates every child object.
 func (r *AuditLogConfigReconciler) reconcileShipper(ctx context.Context, cr *rancherauditv1alpha1.AuditLogConfig) error {
+	// Render the Alloy config once; its hash is stamped on the Deployment so a
+	// config change rolls the pod (mounted ConfigMaps don't trigger restarts).
+	cfg := buildAlloyConfig(cr)
+	cfgHash := configHash(cfg)
+
 	// ConfigMap (CR namespace, owned).
 	cm := newConfigMap(cr)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
 		cm.Labels = childLabels(cr)
-		cm.Data = map[string]string{"config.alloy": buildAlloyConfig(cr)}
+		cm.Data = map[string]string{"config.alloy": cfg}
 		return controllerutil.SetControllerReference(cr, cm, r.Scheme)
 	}); err != nil {
 		return fmt.Errorf("configmap: %w", err)
@@ -156,7 +161,7 @@ func (r *AuditLogConfigReconciler) reconcileShipper(ctx context.Context, cr *ran
 	// Deployment (CR namespace, owned).
 	dep := newDeployment(cr)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-		mutateDeployment(cr, sa.Name, cm.Name, dep)
+		mutateDeployment(cr, sa.Name, cm.Name, cfgHash, dep)
 		return controllerutil.SetControllerReference(cr, dep, r.Scheme)
 	}); err != nil {
 		return fmt.Errorf("deployment: %w", err)
@@ -165,7 +170,7 @@ func (r *AuditLogConfigReconciler) reconcileShipper(ctx context.Context, cr *ran
 	return nil
 }
 
-func mutateDeployment(cr *rancherauditv1alpha1.AuditLogConfig, saName, cmName string, dep *appsv1.Deployment) {
+func mutateDeployment(cr *rancherauditv1alpha1.AuditLogConfig, saName, cmName, cfgHash string, dep *appsv1.Deployment) {
 	replicas := int32(1)
 	dep.Labels = childLabels(cr)
 
@@ -199,7 +204,10 @@ func mutateDeployment(cr *rancherauditv1alpha1.AuditLogConfig, saName, cmName st
 	dep.Spec.Replicas = &replicas
 	dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels(cr)}
 	dep.Spec.Template = corev1.PodTemplateSpec{
-		ObjectMeta: metav1.ObjectMeta{Labels: childLabels(cr)},
+		ObjectMeta: metav1.ObjectMeta{
+			Labels:      childLabels(cr),
+			Annotations: map[string]string{"rancheraudit.io/config-hash": cfgHash},
+		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName: saName,
 			Containers:         []corev1.Container{container},

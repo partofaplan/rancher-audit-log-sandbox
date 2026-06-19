@@ -19,6 +19,16 @@ sidecar), and creates Traefik ingresses:
 - `http://localhost/loki/...` — Loki API, published on the Mac host so the shipper in the
   other cluster can push to it.
 
+> **Local hosts entry:** the clusters run locally on this Mac, and k3d (Docker Desktop)
+> publishes bilbo's Traefik on the host's `:80`. The Grafana ingress uses the hostname
+> `grafana.localhost`, so it needs a hosts entry (macOS does not reliably resolve
+> `*.localhost` for non-browser clients):
+> ```
+> echo "127.0.0.1  grafana.localhost" | sudo tee -a /etc/hosts
+> ```
+> The Loki push path is IP/`localhost`-based and needs no hosts entry. The Rancher UI is
+> reached via its own existing entry (`rancher.k8s.local`).
+
 Verify:
 
 ```bash
@@ -93,18 +103,44 @@ Key spec fields (`operator/config/samples/...yaml`):
 ## 5. Verify in Grafana
 
 Generate activity by clicking around the Rancher UI, then open **http://grafana.localhost**
-→ dashboard **Rancher Audit**, or in Explore run LogQL:
+→ dashboard **Rancher Audit**. The "Audit events" panel renders each entry as a readable
+sentence — e.g. `zperkins get pods default`, `admin update ingresses monitoring/grafana`,
+`admin create users`.
+
+### The `actor` (local username) and the event sentence
+
+The Alloy pipeline promotes an **`actor`** stream label: the Rancher **local/login username**
+from `user.extra.username` (e.g. `zperkins`, `admin`), falling back to the principal
+`user.name` (e.g. `system:cattle:error`) and then `unknown`. So you can group/filter by the
+human login name directly:
 
 ```logql
-# every UI action, reformatted for reading
-{job="rancher-audit"} | json | __error__="" | line_format "{{.user_name}}  {{.method}}  {{.requestURI}}  -> {{.responseCode}}"
+# top users by login name
+topk(10, sum by (actor) (count_over_time({job="rancher-audit", actor!=""}[1h])))
 
-# actions by a specific human user
-sum by (requestURI) (count_over_time({job="rancher-audit"} | json | __error__="" | user_name="user-xdzqk" [1h]))
+# everything a specific user did
+{job="rancher-audit", actor="zperkins"}
 ```
 
-The audit JSON exposes `user.name` (the human actor — for external IdPs, the IdP username),
-`method` (Rancher has no separate `verb`), `requestURI`, `responseCode`, and timestamps.
+The sentence is built at query time: `actor` (label) + a verb mapped from the HTTP `method`
+(POST→create, DELETE→delete, PUT/PATCH→update, GET→get) + the resource kind and
+namespace/name parsed from `requestURI`. The full LogQL is in the dashboard's logs panel
+(`bilbo/dashboard-rancher-audit.yaml`); the core of it:
+
+```logql
+{job="rancher-audit"} | json uri="requestURI" | __error__=""
+  | uri!~`/dashboard/.*|.*\.(js|css|svg|png|woff2?|ico|map|json)|/healthz|/ping|/v3/connect`
+  | label_format verb=`{{ if eq .method "POST" }}create{{ else if eq .method "DELETE" }}delete{{ else if eq .method "PUT" }}update{{ else if eq .method "PATCH" }}update{{ else if eq .method "GET" }}get{{ else }}{{ lower .method }}{{ end }}`
+  | label_format path=`{{ regexReplaceAll "\\?.*" .uri "" }}`
+  | label_format rtype=`{{ regexReplaceAll "^.*/v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?(?:-public)?/([^/]+).*$" .path "${1}" }}`
+  | label_format kind=`{{ regexReplaceAll "^.*\\." .rtype "" }}`
+  | label_format target=`{{ regexReplaceAll "^.*/v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?(?:-public)?/[^/]+/?" .path "" }}`
+  | line_format `{{ .actor }} {{ .verb }} {{ .kind }}{{ if .target }} {{ .target }}{{ end }}`
+```
+
+The audit JSON exposes `user.extra.username` (local/login name), `user.extra.principalid`
+(`local://...` marks a local user), `user.name` (the internal principal id), `method`
+(Rancher has no separate `verb`), `requestURI`, `responseCode`, and timestamps.
 
 > At `AUDIT_LEVEL=1` some entries include large headers and exceed the container runtime's
 > ~16 KB log-line limit, producing split partial lines. The `| __error__=""` filter skips

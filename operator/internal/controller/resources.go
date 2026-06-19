@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -136,17 +138,27 @@ loki.source.kubernetes "audit" {
 loki.process "audit" {
   forward_to = [loki.write.default.receiver]
 
-  // Parse the Rancher audit JSON and promote only low-cardinality fields.
+  // Parse the Rancher audit JSON. "actor" is the Rancher local/login username
+  // (user.extra.username) when present, falling back to the principal (user.name)
+  // for system accounts. Only low-cardinality fields are promoted to labels; the
+  // full JSON stays in the line for query-time sentence formatting.
   stage.json {
     expressions = {
       method       = "method",
       responseCode = "responseCode",
+      login        = "user.extra.username[0]",
+      principal    = "user.name",
     }
+  }
+  stage.template {
+    source   = "actor"
+    template = "{{ if .login }}{{ .login }}{{ else if .principal }}{{ .principal }}{{ else }}unknown{{ end }}"
   }
   stage.labels {
     values = {
       method       = "",
       responseCode = "",
+      actor        = "",
     }
   }
 }
@@ -185,6 +197,13 @@ func labelSelectorString(sel map[string]string) string {
 		parts = append(parts, fmt.Sprintf("%s=%s", k, sel[k]))
 	}
 	return strings.Join(parts, ",")
+}
+
+// configHash is a short content hash of the Alloy config, used to roll the
+// Deployment when the rendered pipeline changes.
+func configHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 func sortedKeys(m map[string]string) []string {
