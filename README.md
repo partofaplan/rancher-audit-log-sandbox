@@ -109,6 +109,47 @@ spec:
 
 (Audit logging must be enabled on that cluster's Rancher first — step 2 / [docs/enable-rancher-audit.md](docs/enable-rancher-audit.md).)
 
+## Installing the dashboard in another ELK / Kibana
+
+The dashboard, visualizations, data view, and saved searches are a portable Kibana
+**saved-objects bundle**: [bilbo/elk/kibana-objects.ndjson](bilbo/elk/kibana-objects.ndjson).
+You can load it into any Kibana 8.x — it's independent of where the operator runs.
+
+**Prerequisite:** the bundle's data view is titled **`rancher-audit`**, so it must match the
+index your shipper writes to (`spec.elasticsearch.index`, default `rancher-audit`). Use the
+same index name, or after importing rename the data view (Stack Management → Data Views) — the
+saved searches and dashboard reference it by id, so they follow automatically.
+
+### Option A — script (against any Kibana)
+
+[bilbo/elk/setup-kibana.sh](bilbo/elk/setup-kibana.sh) POSTs the bundle to Kibana's
+`saved_objects/_import` API (idempotent, `overwrite=true`). Point it at your Kibana, drop the
+local vhost header, and pass credentials — basic auth or an API key (create one under Kibana →
+Stack Management → API keys):
+
+```bash
+# basic auth
+KIBANA_URL=https://kibana.example.com KIBANA_HOST= \
+  KIBANA_USER=elastic KIBANA_PASS='…' ./bilbo/elk/setup-kibana.sh
+
+# API key
+KIBANA_URL=https://kibana.example.com KIBANA_HOST= \
+  KIBANA_APIKEY='<base64 id:api_key>' ./bilbo/elk/setup-kibana.sh
+```
+
+(`KIBANA_HOST=` clears the `kibana.localhost` Host header used only for the local Traefik
+setup. If Kibana is served under a base path, include it in `KIBANA_URL`,
+e.g. `https://host/kibana`.)
+
+### Option B — Kibana UI
+
+Stack Management → **Saved Objects** → **Import** → choose `kibana-objects.ndjson` →
+enable "Automatically overwrite conflicts" → Import.
+
+Either way, then open **Dashboards → Rancher Audit Overview**. To re-export after editing it in
+the UI: Stack Management → Saved Objects → select the objects → Export (keep "include related"),
+and replace `bilbo/elk/kibana-objects.ndjson`.
+
 Open **http://kibana.localhost** → Dashboards → **Rancher Audit Overview** (events over time,
 breakdown by category, top actions, top users, translated event sentences, and raw log
 output), or query Elasticsearch directly: `curl http://localhost/es/rancher-audit/_search`.
