@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- rancheraudit_v1alpha1_auditlogconfig.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

@@ -1,14 +1,20 @@
 apiVersion: rancheraudit.io/v1alpha1
 kind: AuditLogConfig
 metadata:
-  name: default-audit-log-config
+  name: auditlogconfig-sample
   namespace: default
 spec:
   loki:
-    url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
-    tenant: ""
-  forwarder:
-    image: rancher-audit-log-operator:latest
-    replicas: 1
-  auditLevels:
-    - RequestResponse
+    # bilbo's Loki, published on the Mac host :80 via Traefik (path /loki).
+    # 192.168.5.2 is the rancher-desktop (lima) host gateway; 192.168.64.1 also works.
+    url: http://192.168.5.2/loki/api/v1/push
+    externalLabels:
+      cluster: rancher-desktop
+  # source defaults to a standard Rancher Manager install; shown here for clarity.
+  source:
+    namespace: cattle-system
+    podSelector:
+      app: rancher
+    container: rancher-audit-log
+  alloy:
+    image: grafana/alloy:v1.17.0

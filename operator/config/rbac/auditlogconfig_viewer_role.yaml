@@ -1,0 +1,29 @@
+# This rule is not used by the project rancher-audit-log-operator itself.
+# It is provided to allow the cluster admin to help manage permissions for users.
+#
+# Grants read-only access to rancheraudit.io resources.
+# This role is intended for users who need visibility into these resources
+# without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: rancher-audit-log-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: auditlogconfig-viewer-role
+rules:
+- apiGroups:
+  - rancheraudit.io
+  resources:
+  - auditlogconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rancheraudit.io
+  resources:
+  - auditlogconfigs/status
+  verbs:
+  - get

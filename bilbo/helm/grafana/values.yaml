@@ -1,3 +1,6 @@
+# Grafana — sandbox profile. Chart: grafana/grafana 10.5.x (app 12.x).
+# Loki datasource pre-provisioned; the "Rancher Audit" dashboard is loaded from a
+# labeled ConfigMap via the dashboards sidecar (see bilbo/dashboard-rancher-audit.yaml).
 replicaCount: 1
 
 service:
@@ -16,21 +19,20 @@ datasources:
     datasources:
       - name: Loki
         type: loki
+        uid: loki
         access: proxy
         url: http://loki.monitoring.svc.cluster.local:3100
         isDefault: true
         jsonData:
           maxLines: 1000
 
-dashboardProviders:
-  dashboardproviders.yaml:
-    apiVersion: 1
-    providers:
-      - name: 'default'
-        orgId: 1
-        folder: ''
-        type: file
-        disableDeletion: false
-        editable: true
-        options:
-          path: /var/lib/grafana/dashboards
+# Pick up dashboards from ConfigMaps labeled grafana_dashboard="1" in this namespace.
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    labelValue: "1"
+    searchNamespace: monitoring
+    folderAnnotation: grafana_folder
+    provider:
+      foldersFromFilesStructure: true
