@@ -1,28 +1,23 @@
 #!/usr/bin/env bash
-# Create the Kibana data view + saved search for the Rancher audit index.
-# Idempotent (fixed object IDs, overwrite=true). Talks to Kibana through bilbo's
-# Traefik on the Mac host using the kibana.localhost Host header.
+# Import the Kibana saved objects for Rancher auditing: data view, two saved searches
+# (translated event sentences + raw log), aggregation visualizations, and the
+# "Rancher Audit Overview" dashboard. Idempotent (overwrite=true).
+#
+# Talks to Kibana through bilbo's Traefik on the Mac host using the kibana.localhost
+# Host header.
 set -euo pipefail
 
 BASE="${KIBANA_URL:-http://localhost}"
 HOSTHDR="${KIBANA_HOST:-kibana.localhost}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NDJSON="${HERE}/kibana-objects.ndjson"
 
-kb() { curl -fsS -H "Host: ${HOSTHDR}" -H "kbn-xsrf: true" -H "Content-Type: application/json" "$@"; }
+echo ">> Importing Kibana saved objects from $(basename "$NDJSON")"
+RESP=$(curl -fsS -H "Host: ${HOSTHDR}" -H "kbn-xsrf: true" \
+  -X POST "${BASE}/api/saved_objects/_import?overwrite=true" \
+  --form "file=@${NDJSON}")
 
-echo ">> Creating data view 'rancher-audit'"
-kb -X POST "${BASE}/api/saved_objects/index-pattern/rancher-audit?overwrite=true" -d '{
-  "attributes": { "title": "rancher-audit", "name": "Rancher Audit", "timeFieldName": "@timestamp" }
-}' >/dev/null
+echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('   success=%s count=%s' % (d.get('success'), d.get('successCount'))); [print('   ERROR:', e) for e in d.get('errors',[])]" 2>/dev/null \
+  || echo "   response: $RESP"
 
-echo ">> Creating saved search 'Rancher Audit Events'"
-kb -X POST "${BASE}/api/saved_objects/search/rancher-audit-events?overwrite=true" -d '{
-  "attributes": {
-    "title": "Rancher Audit Events",
-    "columns": ["audit.actor","audit.verb","audit.resource","audit.target","audit.responseCode","audit.summary"],
-    "sort": [["@timestamp","desc"]],
-    "kibanaSavedObjectMeta": { "searchSourceJSON": "{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[],\"indexRefName\":\"kibanaSavedObjectMeta.searchSourceJSON.index\"}" }
-  },
-  "references": [{ "id": "rancher-audit", "name": "kibanaSavedObjectMeta.searchSourceJSON.index", "type": "index-pattern" }]
-}' >/dev/null
-
-echo ">> Done. Open Kibana -> Discover -> 'Rancher Audit Events'."
+echo ">> Done. Open Kibana -> Dashboards -> 'Rancher Audit Overview'."
