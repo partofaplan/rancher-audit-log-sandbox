@@ -47,7 +47,21 @@ const (
 //     update, GET->get, POST?action=...->invoke);
 //   - resource/target: the kind and namespace/name parsed from requestURI;
 //   - summary: the readable "actor verb resource (target)" sentence.
-const auditScriptJS = `function process(event) {
+const auditScriptJS = `function categorize(kind) {
+    var k = (kind || "").toLowerCase();
+    if (/(pod|deployment|daemonset|statefulset|replicaset|job|cronjob|workload)/.test(k)) return "workload";
+    if (/(role|rolebinding|globalrole|roletemplate|podsecurity)/.test(k)) return "rbac";
+    if (/(ingress|service|endpoint|networkpolic)/.test(k)) return "networking";
+    if (/(persistentvolume|storageclass|volumesnapshot)/.test(k)) return "storage";
+    if (/(configmap|secret|userpreference|setting|feature)/.test(k)) return "config";
+    if (/(token|user|principal|provider|authconfig|group)/.test(k)) return "auth";
+    if (/(cluster|node|project|namespace|provisioning|fleet|machine|nodepool)/.test(k)) return "cluster";
+    if (/(app|catalog|repo|chart)/.test(k)) return "catalog";
+    if (/(event|healthz|ping|metric|schema|count|navlink)/.test(k)) return "system";
+    return "other";
+}
+
+function process(event) {
     var login = "";
     var arr = event.Get("rancher.user.extra.username");
     if (arr && arr.length > 0) { login = arr[0]; }
@@ -72,6 +86,8 @@ const auditScriptJS = `function process(event) {
     event.Put("audit.verb", verb);
     event.Put("audit.resource", kind);
     event.Put("audit.target", target);
+    event.Put("audit.category", categorize(kind));
+    event.Put("audit.event", verb + " " + kind);
     event.Put("audit.responseCode", event.Get("rancher.responseCode"));
     event.Put("audit.summary", actor + " " + verb + " " + kind + (target ? " " + target : ""));
 }`
