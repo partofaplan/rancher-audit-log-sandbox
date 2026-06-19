@@ -1,0 +1,54 @@
+# Cross-cluster access on bilbo (k3d Traefik publishes :80 on the Mac host).
+#
+# - Elasticsearch: PathPrefix /es with a stripPrefix middleware so the backend sees
+#   root-level ES API paths. Filebeat on rancher-desktop ships here via the Mac host
+#   (http://192.168.5.2/es); from the Mac you can curl http://localhost/es/_cluster/health.
+# - Kibana: host kibana.localhost (add `127.0.0.1 kibana.localhost` to /etc/hosts) -> kibana:5601.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: es-stripprefix
+  namespace: monitoring
+spec:
+  stripPrefix:
+    prefixes:
+      - /es
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: elasticsearch
+  namespace: monitoring
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: monitoring-es-stripprefix@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          - path: /es
+            pathType: Prefix
+            backend:
+              service:
+                name: elasticsearch
+                port:
+                  number: 9200
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana
+  namespace: monitoring
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: kibana.localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kibana
+                port:
+                  number: 5601

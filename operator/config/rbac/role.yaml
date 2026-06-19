@@ -20,8 +20,9 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
+  - nodes
   - pods
-  - pods/log
   verbs:
   - get
   - list
@@ -29,7 +30,7 @@ rules:
 - apiGroups:
   - apps
   resources:
-  - deployments
+  - daemonsets
   verbs:
   - create
   - delete
@@ -37,6 +38,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - rancheraudit.io
@@ -67,8 +76,8 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
-  - rolebindings
-  - roles
+  - clusterrolebindings
+  - clusterroles
   verbs:
   - create
   - delete

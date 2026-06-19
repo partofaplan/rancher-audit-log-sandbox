@@ -19,14 +19,13 @@ package controller
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"sort"
-	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 
 	rancherauditv1alpha1 "github.com/zachperkins/rancher-audit-log-sandbox/operator/api/v1alpha1"
 )
@@ -36,16 +35,48 @@ const (
 
 	defaultSourceNamespace = "cattle-system"
 	defaultSourceContainer = "rancher-audit-log"
-	defaultAlloyImage      = "grafana/alloy:v1.17.0"
-
-	// jobLabel is the Loki stream label every audit entry carries. The Grafana
-	// dashboard and example LogQL queries key off {job="rancher-audit"}.
-	jobLabel = "rancher-audit"
+	defaultFilebeatImage   = "docker.elastic.co/beats/filebeat:8.17.3"
+	defaultIndex           = "rancher-audit"
 )
 
-// applyDefaults fills unset spec fields. Mirrors the +kubebuilder:default markers
-// so the controller behaves correctly even when applied without the CRD defaults
-// (e.g. partial objects in tests).
+// auditScriptJS runs in Filebeat's javascript processor. It derives, from the
+// decoded Rancher audit JSON (under the "rancher" field), an audit.* summary:
+//   - actor: the local/login username (user.extra.username) falling back to the
+//     principal (user.name), then "unknown";
+//   - verb: mapped from the HTTP method (POST->create, DELETE->delete, PUT/PATCH->
+//     update, GET->get, POST?action=...->invoke);
+//   - resource/target: the kind and namespace/name parsed from requestURI;
+//   - summary: the readable "actor verb resource (target)" sentence.
+const auditScriptJS = `function process(event) {
+    var login = "";
+    var arr = event.Get("rancher.user.extra.username");
+    if (arr && arr.length > 0) { login = arr[0]; }
+    var principal = event.Get("rancher.user.name");
+    var actor = login ? login : (principal ? principal : "unknown");
+
+    var method = event.Get("rancher.method") || "";
+    var verbs = {POST: "create", DELETE: "delete", PUT: "update", PATCH: "update", GET: "get"};
+    var verb = verbs[method] || method.toLowerCase();
+    var rawuri = event.Get("rancher.requestURI") || "";
+    if (method === "POST" && rawuri.indexOf("action=") >= 0) { verb = "invoke"; }
+
+    var uri = rawuri.split("?")[0];
+    var tail = uri.replace(/^.*\/v[0-9]+[a-z0-9]*(-public)?\//, "");
+    var rtype = tail.split("/")[0];
+    var dot = rtype.lastIndexOf(".");
+    var kind = dot >= 0 ? rtype.substring(dot + 1) : rtype;
+    var slash = tail.indexOf("/");
+    var target = slash >= 0 ? tail.substring(slash + 1) : "";
+
+    event.Put("audit.actor", actor);
+    event.Put("audit.verb", verb);
+    event.Put("audit.resource", kind);
+    event.Put("audit.target", target);
+    event.Put("audit.responseCode", event.Get("rancher.responseCode"));
+    event.Put("audit.summary", actor + " " + verb + " " + kind + (target ? " " + target : ""));
+}`
+
+// applyDefaults fills unset spec fields. Mirrors the +kubebuilder:default markers.
 func applyDefaults(cr *rancherauditv1alpha1.AuditLogConfig) {
 	s := &cr.Spec.Source
 	if s.Namespace == "" {
@@ -57,18 +88,25 @@ func applyDefaults(cr *rancherauditv1alpha1.AuditLogConfig) {
 	if len(s.PodSelector) == 0 {
 		s.PodSelector = map[string]string{"app": "rancher"}
 	}
-	if cr.Spec.Alloy.Image == "" {
-		cr.Spec.Alloy.Image = defaultAlloyImage
+	if cr.Spec.Filebeat.Image == "" {
+		cr.Spec.Filebeat.Image = defaultFilebeatImage
+	}
+	if cr.Spec.Elasticsearch.Index == "" {
+		cr.Spec.Elasticsearch.Index = defaultIndex
 	}
 }
 
-// resourceName is the deterministic name for all child objects of a CR.
+// resourceName is the deterministic name for namespaced child objects.
 func resourceName(cr *rancherauditv1alpha1.AuditLogConfig) string {
 	return "audit-shipper-" + cr.Name
 }
 
-// childLabels are applied to every owned object; the selector subset is used by
-// the Deployment.
+// clusterResourceName is the name for cluster-scoped child objects (ClusterRole/
+// Binding); it includes the namespace to stay unique cluster-wide.
+func clusterResourceName(cr *rancherauditv1alpha1.AuditLogConfig) string {
+	return "audit-shipper-" + cr.Namespace + "-" + cr.Name
+}
+
 func childLabels(cr *rancherauditv1alpha1.AuditLogConfig) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       "rancher-audit-shipper",
@@ -84,126 +122,80 @@ func selectorLabels(cr *rancherauditv1alpha1.AuditLogConfig) map[string]string {
 	}
 }
 
-// buildAlloyConfig renders the Grafana Alloy (River) pipeline that tails the
-// Rancher audit-log sidecar via the Kubernetes API, labels the streams, and
-// pushes to Loki. Field names match Rancher's audit JSON (method, responseCode);
-// high-cardinality fields like user.name are left in the line for `| json` at
-// query time rather than promoted to labels.
-func buildAlloyConfig(cr *rancherauditv1alpha1.AuditLogConfig) string {
-	var b strings.Builder
+// buildFilebeatConfig renders filebeat.yml: autodiscover the Rancher audit-log
+// container on this node, decode its JSON, derive the audit.* sentence fields, and
+// ship to Elasticsearch. Built as structured data and YAML-marshaled so the embedded
+// JS and dotted keys are escaped correctly.
+func buildFilebeatConfig(cr *rancherauditv1alpha1.AuditLogConfig) (string, error) {
+	es := cr.Spec.Elasticsearch
 
-	fmt.Fprintf(&b, `discovery.kubernetes "rancher" {
-  role = "pod"
-  namespaces {
-    names = [%q]
-  }
-  selectors {
-    role  = "pod"
-    label = %q
-  }
-}
-
-discovery.relabel "audit" {
-  targets = discovery.kubernetes.rancher.targets
-
-  // Keep only the audit-log sidecar container.
-  rule {
-    source_labels = ["__meta_kubernetes_pod_container_name"]
-    regex         = %q
-    action        = "keep"
-  }
-  rule {
-    source_labels = ["__meta_kubernetes_namespace"]
-    target_label  = "namespace"
-  }
-  rule {
-    source_labels = ["__meta_kubernetes_pod_name"]
-    target_label  = "pod"
-  }
-  rule {
-    source_labels = ["__meta_kubernetes_pod_container_name"]
-    target_label  = "container"
-  }
-  rule {
-    target_label = "job"
-    replacement  = %q
-  }
-}
-
-loki.source.kubernetes "audit" {
-  targets    = discovery.relabel.audit.output
-  forward_to = [loki.process.audit.receiver]
-}
-
-loki.process "audit" {
-  forward_to = [loki.write.default.receiver]
-
-  // Parse the Rancher audit JSON. "actor" is the Rancher local/login username
-  // (user.extra.username) when present, falling back to the principal (user.name)
-  // for system accounts. Only low-cardinality fields are promoted to labels; the
-  // full JSON stays in the line for query-time sentence formatting.
-  stage.json {
-    expressions = {
-      method       = "method",
-      responseCode = "responseCode",
-      login        = "user.extra.username[0]",
-      principal    = "user.name",
-    }
-  }
-  stage.template {
-    source   = "actor"
-    template = "{{ if .login }}{{ .login }}{{ else if .principal }}{{ .principal }}{{ else }}unknown{{ end }}"
-  }
-  stage.labels {
-    values = {
-      method       = "",
-      responseCode = "",
-      actor        = "",
-    }
-  }
-}
-
-`, cr.Spec.Source.Namespace, labelSelectorString(cr.Spec.Source.PodSelector),
-		cr.Spec.Source.Container, jobLabel)
-
-	b.WriteString("loki.write \"default\" {\n  endpoint {\n")
-	fmt.Fprintf(&b, "    url = %q\n", cr.Spec.Loki.URL)
-	if cr.Spec.Loki.Tenant != "" {
-		fmt.Fprintf(&b, "    tenant_id = %q\n", cr.Spec.Loki.Tenant)
+	conds := []interface{}{
+		map[string]interface{}{"equals": map[string]interface{}{"kubernetes.namespace": cr.Spec.Source.Namespace}},
+		map[string]interface{}{"equals": map[string]interface{}{"kubernetes.container.name": cr.Spec.Source.Container}},
 	}
-	if cr.Spec.Loki.BasicAuthSecretRef != "" {
-		b.WriteString("    basic_auth {\n")
-		b.WriteString("      username = sys.env(\"LOKI_USERNAME\")\n")
-		b.WriteString("      password = sys.env(\"LOKI_PASSWORD\")\n")
-		b.WriteString("    }\n")
+	for _, k := range sortedKeys(cr.Spec.Source.PodSelector) {
+		conds = append(conds, map[string]interface{}{
+			"equals": map[string]interface{}{"kubernetes.labels." + k: cr.Spec.Source.PodSelector[k]},
+		})
 	}
-	b.WriteString("  }\n")
 
-	if len(cr.Spec.Loki.ExternalLabels) > 0 {
-		b.WriteString("  external_labels = {\n")
-		for _, k := range sortedKeys(cr.Spec.Loki.ExternalLabels) {
-			fmt.Fprintf(&b, "    %s = %q,\n", k, cr.Spec.Loki.ExternalLabels[k])
-		}
-		b.WriteString("  }\n")
+	esOut := map[string]interface{}{
+		"hosts": []string{es.Host},
+		"index": es.Index,
 	}
-	b.WriteString("}\n")
-
-	return b.String()
-}
-
-func labelSelectorString(sel map[string]string) string {
-	parts := make([]string, 0, len(sel))
-	for _, k := range sortedKeys(sel) {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, sel[k]))
+	if es.PathPrefix != "" {
+		esOut["path"] = es.PathPrefix
 	}
-	return strings.Join(parts, ",")
-}
+	if es.BasicAuthSecretRef != "" {
+		esOut["username"] = "${ES_USERNAME}"
+		esOut["password"] = "${ES_PASSWORD}"
+	}
 
-// configHash is a short content hash of the Alloy config, used to roll the
-// Deployment when the rendered pipeline changes.
-func configHash(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])[:16]
+	cfg := map[string]interface{}{
+		"filebeat.autodiscover": map[string]interface{}{
+			"providers": []interface{}{
+				map[string]interface{}{
+					"type": "kubernetes",
+					"node": "${NODE_NAME}",
+					"templates": []interface{}{
+						map[string]interface{}{
+							"condition": map[string]interface{}{"and": conds},
+							"config": []interface{}{
+								map[string]interface{}{
+									"type":  "container",
+									"paths": []string{"/var/log/containers/*-${data.kubernetes.container.id}.log"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		"processors": []interface{}{
+			map[string]interface{}{"decode_json_fields": map[string]interface{}{
+				"fields":         []string{"message"},
+				"target":         "rancher",
+				"overwrite_keys": true,
+				"add_error_key":  true,
+			}},
+			map[string]interface{}{"script": map[string]interface{}{
+				"lang":   "javascript",
+				"source": auditScriptJS,
+			}},
+		},
+		"output.elasticsearch": esOut,
+		// Write to a plain, auto-created index (no Filebeat-managed template / ILM /
+		// data stream) — simplest for a sandbox. ES auto-creates the index on first write.
+		"setup.template.enabled": false,
+		"setup.ilm.enabled":      false,
+		"logging.level":          "info",
+	}
+
+	b, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func sortedKeys(m map[string]string) []string {
@@ -215,37 +207,36 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
+// configHash is a short content hash of the Filebeat config, used to roll the
+// DaemonSet when the rendered pipeline changes.
+func configHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
 // --- object builders (names/namespaces only; specs are set in mutate fns) ---
 
 func newConfigMap(cr *rancherauditv1alpha1.AuditLogConfig) *corev1.ConfigMap {
-	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
-		Name: resourceName(cr), Namespace: cr.Namespace,
-	}}
+	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: resourceName(cr), Namespace: cr.Namespace}}
 }
 
 func newServiceAccount(cr *rancherauditv1alpha1.AuditLogConfig) *corev1.ServiceAccount {
-	return &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
-		Name: resourceName(cr), Namespace: cr.Namespace,
-	}}
+	return &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: resourceName(cr), Namespace: cr.Namespace}}
 }
 
-// Role/RoleBinding live in the source namespace (cattle-system) so Alloy can read
-// pod logs there. They are managed without owner refs (cross-namespace) and cleaned
-// up via the finalizer.
-func newRole(cr *rancherauditv1alpha1.AuditLogConfig) *rbacv1.Role {
-	return &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
-		Name: resourceName(cr), Namespace: cr.Spec.Source.Namespace,
-	}}
+// ClusterRole/Binding are cluster-scoped (Filebeat autodiscover reads pods/namespaces/
+// nodes cluster-wide). They carry no owner ref and are cleaned up via the finalizer.
+func newClusterRole(cr *rancherauditv1alpha1.AuditLogConfig) *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: clusterResourceName(cr)}}
 }
 
-func newRoleBinding(cr *rancherauditv1alpha1.AuditLogConfig) *rbacv1.RoleBinding {
-	return &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
-		Name: resourceName(cr), Namespace: cr.Spec.Source.Namespace,
-	}}
+func newClusterRoleBinding(cr *rancherauditv1alpha1.AuditLogConfig) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterResourceName(cr)}}
 }
 
-func newDeployment(cr *rancherauditv1alpha1.AuditLogConfig) *appsv1.Deployment {
-	return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-		Name: resourceName(cr), Namespace: cr.Namespace,
-	}}
+func newDaemonSet(cr *rancherauditv1alpha1.AuditLogConfig) *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: resourceName(cr), Namespace: cr.Namespace}}
 }
+
+// hostPathType returns a pointer to t (helper for volume sources).
+func hostPathType(t corev1.HostPathType) *corev1.HostPathType { return &t }

@@ -46,14 +46,15 @@ type AuditLogConfigReconciler struct {
 // +kubebuilder:rbac:groups=rancheraudit.io,resources=auditlogconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=rancheraudit.io,resources=auditlogconfigs/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=serviceaccounts;configmaps,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
-// Alloy reads pod logs in the source namespace; the operator must be able to grant that.
-// +kubebuilder:rbac:groups=core,resources=pods;pods/log,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// Filebeat autodiscover reads these cluster-wide; the operator must hold them to grant them.
+// +kubebuilder:rbac:groups=core,resources=pods;namespaces;nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
 
 // Reconcile drives the actual cluster state toward the AuditLogConfig spec by
-// reconciling a Grafana Alloy shipper (ConfigMap + ServiceAccount + Role/Binding +
-// Deployment) that tails the Rancher audit-log sidecar and pushes to Loki.
+// reconciling a Filebeat shipper (ConfigMap + ServiceAccount + ClusterRole/Binding +
+// DaemonSet) that tails the Rancher audit-log sidecar and ships to Elasticsearch.
 func (r *AuditLogConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -63,10 +64,10 @@ func (r *AuditLogConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	applyDefaults(cr)
 
-	// Handle deletion: tear down the cross-namespace RBAC, then drop the finalizer.
+	// Handle deletion: tear down the cluster-scoped RBAC, then drop the finalizer.
 	if !cr.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(cr, finalizerName) {
-			if err := r.cleanupSourceRBAC(ctx, cr); err != nil {
+			if err := r.cleanupClusterRBAC(ctx, cr); err != nil {
 				return ctrl.Result{}, err
 			}
 			controllerutil.RemoveFinalizer(cr, finalizerName)
@@ -96,22 +97,25 @@ func (r *AuditLogConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	r.setReady(ctx, cr, true, "Reconciled", "Alloy shipper is configured")
+	r.setReady(ctx, cr, true, "Reconciled", "Filebeat shipper is configured")
 	return ctrl.Result{}, nil
 }
 
 // reconcileShipper creates/updates every child object.
 func (r *AuditLogConfigReconciler) reconcileShipper(ctx context.Context, cr *rancherauditv1alpha1.AuditLogConfig) error {
-	// Render the Alloy config once; its hash is stamped on the Deployment so a
-	// config change rolls the pod (mounted ConfigMaps don't trigger restarts).
-	cfg := buildAlloyConfig(cr)
+	// Render the Filebeat config once; its hash is stamped on the DaemonSet so a
+	// config change rolls the pods (mounted ConfigMaps don't trigger restarts).
+	cfg, err := buildFilebeatConfig(cr)
+	if err != nil {
+		return fmt.Errorf("render config: %w", err)
+	}
 	cfgHash := configHash(cfg)
 
 	// ConfigMap (CR namespace, owned).
 	cm := newConfigMap(cr)
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
 		cm.Labels = childLabels(cr)
-		cm.Data = map[string]string{"config.alloy": cfg}
+		cm.Data = map[string]string{"filebeat.yml": cfg}
 		return controllerutil.SetControllerReference(cr, cm, r.Scheme)
 	}); err != nil {
 		return fmt.Errorf("configmap: %w", err)
@@ -126,105 +130,105 @@ func (r *AuditLogConfigReconciler) reconcileShipper(ctx context.Context, cr *ran
 		return fmt.Errorf("serviceaccount: %w", err)
 	}
 
-	// Role + RoleBinding in the source namespace (cross-namespace, no owner ref).
-	role := newRole(cr)
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
-		role.Labels = childLabels(cr)
-		role.Rules = []rbacv1.PolicyRule{{
-			APIGroups: []string{""},
-			Resources: []string{"pods", "pods/log"},
-			Verbs:     []string{"get", "list", "watch"},
-		}}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("role: %w", err)
-	}
-
-	rb := newRoleBinding(cr)
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, rb, func() error {
-		rb.Labels = childLabels(cr)
-		rb.RoleRef = rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "Role",
-			Name:     role.Name,
+	// ClusterRole + ClusterRoleBinding (cluster-scoped, no owner ref → finalizer cleanup).
+	clusterRole := newClusterRole(cr)
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, clusterRole, func() error {
+		clusterRole.Labels = childLabels(cr)
+		clusterRole.Rules = []rbacv1.PolicyRule{
+			{APIGroups: []string{""}, Resources: []string{"pods", "namespaces", "nodes"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{"apps"}, Resources: []string{"replicasets"}, Verbs: []string{"get", "list", "watch"}},
 		}
-		rb.Subjects = []rbacv1.Subject{{
-			Kind:      "ServiceAccount",
-			Name:      sa.Name,
-			Namespace: cr.Namespace,
-		}}
 		return nil
 	}); err != nil {
-		return fmt.Errorf("rolebinding: %w", err)
+		return fmt.Errorf("clusterrole: %w", err)
 	}
 
-	// Deployment (CR namespace, owned).
-	dep := newDeployment(cr)
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-		mutateDeployment(cr, sa.Name, cm.Name, cfgHash, dep)
-		return controllerutil.SetControllerReference(cr, dep, r.Scheme)
+	crb := newClusterRoleBinding(cr)
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
+		crb.Labels = childLabels(cr)
+		crb.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterRole.Name}
+		crb.Subjects = []rbacv1.Subject{{Kind: "ServiceAccount", Name: sa.Name, Namespace: cr.Namespace}}
+		return nil
 	}); err != nil {
-		return fmt.Errorf("deployment: %w", err)
+		return fmt.Errorf("clusterrolebinding: %w", err)
+	}
+
+	// DaemonSet (CR namespace, owned).
+	ds := newDaemonSet(cr)
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, ds, func() error {
+		mutateDaemonSet(cr, sa.Name, cm.Name, cfgHash, ds)
+		return controllerutil.SetControllerReference(cr, ds, r.Scheme)
+	}); err != nil {
+		return fmt.Errorf("daemonset: %w", err)
 	}
 
 	return nil
 }
 
-func mutateDeployment(cr *rancherauditv1alpha1.AuditLogConfig, saName, cmName, cfgHash string, dep *appsv1.Deployment) {
-	replicas := int32(1)
-	dep.Labels = childLabels(cr)
+func mutateDaemonSet(cr *rancherauditv1alpha1.AuditLogConfig, saName, cmName, cfgHash string, ds *appsv1.DaemonSet) {
+	ds.Labels = childLabels(cr)
+	rootUID := int64(0)
 
 	container := corev1.Container{
-		Name:  "alloy",
-		Image: cr.Spec.Alloy.Image,
-		Args: []string{
-			"run",
-			"--server.http.listen-addr=0.0.0.0:12345",
-			"--storage.path=/var/lib/alloy/data",
-			"/etc/alloy/config.alloy",
+		Name:  "filebeat",
+		Image: cr.Spec.Filebeat.Image,
+		Args:  []string{"-e", "-c", "/etc/filebeat/filebeat.yml", "--strict.perms=false"},
+		Env: []corev1.EnvVar{
+			{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
 		},
-		Resources: cr.Spec.Alloy.Resources,
-		Ports:     []corev1.ContainerPort{{Name: "http", ContainerPort: 12345}},
+		Resources:       cr.Spec.Filebeat.Resources,
+		SecurityContext: &corev1.SecurityContext{RunAsUser: &rootUID},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "config", MountPath: "/etc/alloy"},
-			{Name: "data", MountPath: "/var/lib/alloy/data"},
+			{Name: "config", MountPath: "/etc/filebeat", ReadOnly: true},
+			{Name: "data", MountPath: "/usr/share/filebeat/data"},
+			{Name: "varlogcontainers", MountPath: "/var/log/containers", ReadOnly: true},
+			{Name: "varlogpods", MountPath: "/var/log/pods", ReadOnly: true},
+			// On dockerd nodes (rancher-desktop), /var/log/pods/.../0.log symlinks into
+			// here; on containerd nodes this is empty and the pod logs are read directly.
+			{Name: "varlibdockercontainers", MountPath: "/var/lib/docker/containers", ReadOnly: true},
 		},
 	}
-	if cr.Spec.Loki.BasicAuthSecretRef != "" {
-		container.Env = []corev1.EnvVar{
-			{Name: "LOKI_USERNAME", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: cr.Spec.Loki.BasicAuthSecretRef}, Key: "username",
-			}}},
-			{Name: "LOKI_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: cr.Spec.Loki.BasicAuthSecretRef}, Key: "password",
-			}}},
-		}
+	if cr.Spec.Elasticsearch.BasicAuthSecretRef != "" {
+		ref := cr.Spec.Elasticsearch.BasicAuthSecretRef
+		container.Env = append(container.Env,
+			corev1.EnvVar{Name: "ES_USERNAME", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: ref}, Key: "username"}}},
+			corev1.EnvVar{Name: "ES_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: ref}, Key: "password"}}},
+		)
 	}
 
-	dep.Spec.Replicas = &replicas
-	dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels(cr)}
-	dep.Spec.Template = corev1.PodTemplateSpec{
+	ds.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels(cr)}
+	ds.Spec.Template = corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels:      childLabels(cr),
 			Annotations: map[string]string{"rancheraudit.io/config-hash": cfgHash},
 		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName: saName,
-			Containers:         []corev1.Container{container},
+			// Run on every node, including tainted control-plane nodes (rancher-desktop is one).
+			Tolerations: []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
+			Containers:  []corev1.Container{container},
 			Volumes: []corev1.Volume{
 				{Name: "config", VolumeSource: corev1.VolumeSource{
-					ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}},
-				}},
-				{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+					ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}}}},
+				{Name: "data", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/lib/" + resourceName(cr) + "-data", Type: hostPathType(corev1.HostPathDirectoryOrCreate)}}},
+				{Name: "varlogcontainers", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/log/containers"}}},
+				{Name: "varlogpods", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/log/pods"}}},
+				{Name: "varlibdockercontainers", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/lib/docker/containers", Type: hostPathType(corev1.HostPathDirectoryOrCreate)}}},
 			},
 		},
 	}
 }
 
-// cleanupSourceRBAC removes the Role/RoleBinding created in the source namespace,
-// which cannot carry an owner reference back to the (different-namespace) CR.
-func (r *AuditLogConfigReconciler) cleanupSourceRBAC(ctx context.Context, cr *rancherauditv1alpha1.AuditLogConfig) error {
-	for _, obj := range []client.Object{newRoleBinding(cr), newRole(cr)} {
+// cleanupClusterRBAC removes the cluster-scoped ClusterRole/ClusterRoleBinding, which
+// cannot carry an owner reference back to the namespaced CR.
+func (r *AuditLogConfigReconciler) cleanupClusterRBAC(ctx context.Context, cr *rancherauditv1alpha1.AuditLogConfig) error {
+	for _, obj := range []client.Object{newClusterRoleBinding(cr), newClusterRole(cr)} {
 		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
@@ -266,7 +270,7 @@ func (r *AuditLogConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&rancherauditv1alpha1.AuditLogConfig{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.ServiceAccount{}).
-		Owns(&appsv1.Deployment{}).
+		Owns(&appsv1.DaemonSet{}).
 		Named("auditlogconfig").
 		Complete(r)
 }

@@ -23,44 +23,46 @@ import (
 
 // AuditLogConfigSpec defines the desired state of AuditLogConfig.
 //
-// An AuditLogConfig describes one export pipeline: scrape the Rancher audit-log
-// sidecar's stdout and ship the parsed entries to a Loki instance. The operator
-// reconciles a Grafana Alloy deployment (+ConfigMap +RBAC) to fulfill it.
+// An AuditLogConfig describes one export pipeline: tail the Rancher audit-log
+// sidecar's container logs and ship the parsed entries to Elasticsearch. The
+// operator reconciles a Filebeat DaemonSet (+ConfigMap +RBAC) to fulfill it.
 type AuditLogConfigSpec struct {
-	// Loki is the destination to push audit logs to.
+	// Elasticsearch is the destination to ship audit logs to.
 	// +required
-	Loki LokiSpec `json:"loki"`
+	Elasticsearch ElasticsearchSpec `json:"elasticsearch"`
 
 	// Source selects which pods/container produce the Rancher audit JSON.
 	// Defaults target a standard Rancher Manager install.
 	// +optional
 	Source SourceSpec `json:"source,omitempty"`
 
-	// Alloy tunes the Grafana Alloy log-shipper deployment.
+	// Filebeat tunes the Filebeat log-shipper DaemonSet.
 	// +optional
-	Alloy AlloySpec `json:"alloy,omitempty"`
+	Filebeat FilebeatSpec `json:"filebeat,omitempty"`
 }
 
-// LokiSpec describes the Loki push destination.
-type LokiSpec struct {
-	// URL is the Loki push endpoint, e.g. http://192.168.64.1/loki/api/v1/push
+// ElasticsearchSpec describes the Elasticsearch destination.
+type ElasticsearchSpec struct {
+	// Host is the Elasticsearch endpoint reachable from the shipper, scheme + host
+	// [+ port], e.g. http://192.168.5.2 (the Mac host that fronts bilbo's Traefik).
 	// +required
 	// +kubebuilder:validation:MinLength=1
-	URL string `json:"url"`
+	Host string `json:"host"`
 
-	// Tenant sets the X-Scope-OrgID header for multi-tenant Loki. Optional.
+	// PathPrefix is the base path when ES sits behind a reverse proxy, e.g. /es
+	// (bilbo exposes ES under a stripped /es prefix). Optional.
 	// +optional
-	Tenant string `json:"tenant,omitempty"`
+	PathPrefix string `json:"pathPrefix,omitempty"`
+
+	// Index is the target index prefix; a daily "-yyyy.MM.dd" suffix is appended.
+	// +optional
+	// +kubebuilder:default=rancher-audit
+	Index string `json:"index,omitempty"`
 
 	// BasicAuthSecretRef names a Secret (same namespace as the CR) with keys
-	// "username" and "password" for Loki basic auth. Optional.
+	// "username" and "password" for Elasticsearch basic auth. Optional.
 	// +optional
 	BasicAuthSecretRef string `json:"basicAuthSecretRef,omitempty"`
-
-	// ExternalLabels are static labels added to every shipped stream,
-	// e.g. {cluster: rancher-desktop}. Keep these low-cardinality.
-	// +optional
-	ExternalLabels map[string]string `json:"externalLabels,omitempty"`
 }
 
 // SourceSpec selects the audit-log source pods/container.
@@ -80,14 +82,14 @@ type SourceSpec struct {
 	Container string `json:"container,omitempty"`
 }
 
-// AlloySpec tunes the shipper deployment.
-type AlloySpec struct {
-	// Image is the Grafana Alloy image. Default: grafana/alloy:v1.17.0.
+// FilebeatSpec tunes the shipper DaemonSet.
+type FilebeatSpec struct {
+	// Image is the Filebeat image. Default: docker.elastic.co/beats/filebeat:8.17.3.
 	// +optional
-	// +kubebuilder:default="grafana/alloy:v1.17.0"
+	// +kubebuilder:default="docker.elastic.co/beats/filebeat:8.17.3"
 	Image string `json:"image,omitempty"`
 
-	// Resources for the Alloy container. Optional.
+	// Resources for the Filebeat container. Optional.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 }
@@ -126,7 +128,7 @@ type AuditLogConfigStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=alc
-// +kubebuilder:printcolumn:name="Loki",type=string,JSONPath=`.spec.loki.url`
+// +kubebuilder:printcolumn:name="Elasticsearch",type=string,JSONPath=`.spec.elasticsearch.host`
 // +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

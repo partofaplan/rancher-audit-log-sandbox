@@ -17,8 +17,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.loki.url
-      name: Loki
+    - jsonPath: .spec.elasticsearch.host
+      name: Elasticsearch
       type: string
     - jsonPath: .status.ready
       name: Ready
@@ -51,15 +51,42 @@ spec:
           spec:
             description: spec defines the desired state of AuditLogConfig
             properties:
-              alloy:
-                description: Alloy tunes the Grafana Alloy log-shipper deployment.
+              elasticsearch:
+                description: Elasticsearch is the destination to ship audit logs to.
+                properties:
+                  basicAuthSecretRef:
+                    description: |-
+                      BasicAuthSecretRef names a Secret (same namespace as the CR) with keys
+                      "username" and "password" for Elasticsearch basic auth. Optional.
+                    type: string
+                  host:
+                    description: |-
+                      Host is the Elasticsearch endpoint reachable from the shipper, scheme + host
+                      [+ port], e.g. http://192.168.5.2 (the Mac host that fronts bilbo's Traefik).
+                    minLength: 1
+                    type: string
+                  index:
+                    default: rancher-audit
+                    description: Index is the target index prefix; a daily "-yyyy.MM.dd"
+                      suffix is appended.
+                    type: string
+                  pathPrefix:
+                    description: |-
+                      PathPrefix is the base path when ES sits behind a reverse proxy, e.g. /es
+                      (bilbo exposes ES under a stripped /es prefix). Optional.
+                    type: string
+                required:
+                - host
+                type: object
+              filebeat:
+                description: Filebeat tunes the Filebeat log-shipper DaemonSet.
                 properties:
                   image:
-                    default: grafana/alloy:v1.17.0
-                    description: 'Image is the Grafana Alloy image. Default: grafana/alloy:v1.17.0.'
+                    default: docker.elastic.co/beats/filebeat:8.17.3
+                    description: 'Image is the Filebeat image. Default: docker.elastic.co/beats/filebeat:8.17.3.'
                     type: string
                   resources:
-                    description: Resources for the Alloy container. Optional.
+                    description: Resources for the Filebeat container. Optional.
                     properties:
                       claims:
                         description: |-
@@ -118,32 +145,6 @@ spec:
                         type: object
                     type: object
                 type: object
-              loki:
-                description: Loki is the destination to push audit logs to.
-                properties:
-                  basicAuthSecretRef:
-                    description: |-
-                      BasicAuthSecretRef names a Secret (same namespace as the CR) with keys
-                      "username" and "password" for Loki basic auth. Optional.
-                    type: string
-                  externalLabels:
-                    additionalProperties:
-                      type: string
-                    description: |-
-                      ExternalLabels are static labels added to every shipped stream,
-                      e.g. {cluster: rancher-desktop}. Keep these low-cardinality.
-                    type: object
-                  tenant:
-                    description: Tenant sets the X-Scope-OrgID header for multi-tenant
-                      Loki. Optional.
-                    type: string
-                  url:
-                    description: URL is the Loki push endpoint, e.g. http://192.168.64.1/loki/api/v1/push
-                    minLength: 1
-                    type: string
-                required:
-                - url
-                type: object
               source:
                 description: |-
                   Source selects which pods/container produce the Rancher audit JSON.
@@ -166,7 +167,7 @@ spec:
                     type: object
                 type: object
             required:
-            - loki
+            - elasticsearch
             type: object
           status:
             description: status defines the observed state of AuditLogConfig

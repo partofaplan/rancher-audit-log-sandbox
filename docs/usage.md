@@ -107,6 +107,11 @@ Generate activity by clicking around the Rancher UI, then open **http://grafana.
 sentence — e.g. `zperkins get pods default`, `admin update ingresses monitoring/grafana`,
 `admin create users`.
 
+Use the **Actions** dropdown at the top to switch between **All** activity and **Changes
+(create/update/delete)** — the latter filters to mutating HTTP methods
+(`POST|PUT|PATCH|DELETE`) and applies to all three panels. It's implemented as a custom
+dashboard variable interpolated into the stream selector as `method=~"$actions"`.
+
 ### The `actor` (local username) and the event sentence
 
 The Alloy pipeline promotes an **`actor`** stream label: the Rancher **local/login username**

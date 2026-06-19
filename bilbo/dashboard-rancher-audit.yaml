@@ -25,7 +25,7 @@ data:
       "title": "Rancher Audit",
       "uid": "rancher-audit",
       "schemaVersion": 39,
-      "version": 2,
+      "version": 3,
       "time": {
         "from": "now-6h",
         "to": "now"
@@ -41,6 +41,32 @@ data:
               "value": "loki"
             },
             "hide": 0
+          },
+          {
+            "name": "actions",
+            "type": "custom",
+            "label": "Actions",
+            "description": "Filter to all activity or only mutating actions (create/update/delete).",
+            "query": "All : .+,Changes (create/update/delete) : POST|PUT|PATCH|DELETE",
+            "includeAll": false,
+            "multi": false,
+            "current": {
+              "text": "All",
+              "value": ".+",
+              "selected": true
+            },
+            "options": [
+              {
+                "text": "All",
+                "value": ".+",
+                "selected": true
+              },
+              {
+                "text": "Changes (create/update/delete)",
+                "value": "POST|PUT|PATCH|DELETE",
+                "selected": false
+              }
+            ]
           }
         ]
       },
@@ -78,7 +104,7 @@ data:
                 "uid": "${datasource}"
               },
               "queryType": "range",
-              "expr": "sum by (method) (count_over_time({job=\"rancher-audit\"}[$__auto]))"
+              "expr": "sum by (method) (count_over_time({job=\"rancher-audit\", method=~\"$actions\"}[$__auto]))"
             }
           ]
         },
@@ -108,7 +134,7 @@ data:
                 "uid": "${datasource}"
               },
               "queryType": "instant",
-              "expr": "topk(10, sum by (actor) (count_over_time({job=\"rancher-audit\", actor!=\"\"}[$__range])))",
+              "expr": "topk(10, sum by (actor) (count_over_time({job=\"rancher-audit\", actor!=\"\", method=~\"$actions\"}[$__range])))",
               "legendFormat": "{{actor}}"
             }
           ]
@@ -143,7 +169,7 @@ data:
                 "uid": "${datasource}"
               },
               "queryType": "range",
-              "expr": "{job=\"rancher-audit\"}\n| json uri=\"requestURI\"\n| __error__=\"\"\n| uri!~`/dashboard/.*|.*\\.(js|css|svg|png|woff2?|ico|map|json)|/healthz|/ping|/v3/connect|/metricsendpoint.*`\n| label_format verb=`{{ if eq .method \"POST\" }}{{ if (contains \"action=\" .uri) }}invoke{{ else }}create{{ end }}{{ else if eq .method \"DELETE\" }}delete{{ else if eq .method \"PUT\" }}update{{ else if eq .method \"PATCH\" }}update{{ else if eq .method \"GET\" }}get{{ else }}{{ lower .method }}{{ end }}`\n| label_format path=`{{ regexReplaceAll \"\\\\?.*\" .uri \"\" }}`\n| label_format rtype=`{{ regexReplaceAll \"^.*/v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?(?:-public)?/([^/]+).*$\" .path \"${1}\" }}`\n| label_format kind=`{{ regexReplaceAll \"^.*\\\\.\" .rtype \"\" }}`\n| label_format target=`{{ regexReplaceAll \"^.*/v[0-9]+(?:alpha[0-9]+|beta[0-9]+)?(?:-public)?/[^/]+/?\" .path \"\" }}`\n| line_format `{{ .actor }} {{ .verb }} {{ .kind }}{{ if .target }} {{ .target }}{{ end }}`"
+              "expr": "{job=\"rancher-audit\", method=~\"$actions\"}\n| json uri=\"requestURI\"\n| __error__=\"\"\n| uri!~`/dashboard/.*|.*\\.(js|css|svg|png|woff2?|ico|map|json)|/healthz|/ping|/v3/connect|/metricsendpoint.*`\n| label_format verb=`{{ if eq .method \"POST\" }}{{ if (contains \"action=\" .uri) }}invoke{{ else }}create{{ end }}{{ else if eq .method \"DELETE\" }}delete{{ else if eq .method \"PUT\" }}update{{ else if eq .method \"PATCH\" }}update{{ else if eq .method \"GET\" }}get{{ else }}{{ lower .method }}{{ end }}`\n| label_format path=`{{ regexReplaceAll \"\\\\?.*\" .uri \"\" }}`\n| label_format tail=`{{ regexReplaceAll \"^.*/v[0-9]+[a-z0-9]*(?:-public)?/\" .path \"\" }}`\n| label_format rtype=`{{ regexReplaceAll \"/.*\" .tail \"\" }}`\n| label_format kind=`{{ regexReplaceAll \"^.*\\\\.\" .rtype \"\" }}`\n| label_format target=`{{ regexReplaceAll \"^[^/]+/?\" .tail \"\" }}`\n| line_format `{{ .actor }} {{ .verb }} {{ .kind }}{{ if .target }} {{ .target }}{{ end }}`"
             }
           ]
         }
