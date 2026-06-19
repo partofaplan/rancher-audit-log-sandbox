@@ -86,6 +86,11 @@ func (r *AuditLogConfigReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	if err := r.reconcileShipper(ctx, cr); err != nil {
+		// Conflicts are expected when the Owns watches fire mid-reconcile during the
+		// initial create-storm; requeue quietly rather than logging a stack trace.
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		log.Error(err, "reconcile failed")
 		r.setReady(ctx, cr, false, "ReconcileFailed", err.Error())
 		return ctrl.Result{}, err

@@ -44,7 +44,7 @@ data:
             {
               "refId": "A",
               "datasource": { "type": "loki", "uid": "${datasource}" },
-              "expr": "sum by (method) (count_over_time({job=\"rancher-audit\"} | json [$__auto]))",
+              "expr": "sum by (method) (count_over_time({job=\"rancher-audit\"} | json | __error__=\"\" [$__auto]))",
               "queryType": "range"
             }
           ]
@@ -60,7 +60,7 @@ data:
             {
               "refId": "A",
               "datasource": { "type": "loki", "uid": "${datasource}" },
-              "expr": "topk(10, sum by (user_name) (count_over_time({job=\"rancher-audit\"} | json [$__range])))",
+              "expr": "topk(10, sum by (user_name) (count_over_time({job=\"rancher-audit\"} | json | __error__=\"\" [$__range])))",
               "queryType": "instant",
               "legendFormat": "{{user_name}}"
             }
@@ -77,7 +77,7 @@ data:
             {
               "refId": "A",
               "datasource": { "type": "loki", "uid": "${datasource}" },
-              "expr": "{job=\"rancher-audit\"} | json | line_format \"{{.user_name}}  {{.method}}  {{.requestURI}}  -> {{.responseCode}}\"",
+              "expr": "{job=\"rancher-audit\"} | json | __error__=\"\" | line_format \"{{.user_name}}  {{.method}}  {{.requestURI}}  -> {{.responseCode}}\"",
               "queryType": "range"
             }
           ]
