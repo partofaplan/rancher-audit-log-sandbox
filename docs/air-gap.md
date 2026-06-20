@@ -36,6 +36,27 @@ To build the bundle yourself on a connected machine:
 installed — saving the amd64 Filebeat image via `docker save` on an arm64 Docker Desktop fails
 (use `skopeo`, the GitHub workflow, or `INCLUDE_FILEBEAT=0` to mirror Filebeat separately).
 
+## Optional: build the operator image inside the air gap (Go + Podman/Docker)
+
+You normally don't need to build in the gap — the bundle ships a prebuilt operator image. But
+if you prefer to build from source on an air-gapped node, it works **offline** because the Go
+dependencies are vendored into `operator/vendor/` (committed). `build-image.sh`:
+
+- uses `-mod=vendor` + `GOPROXY=off` automatically when `vendor/` is present (no module cache
+  or network needed), and
+- auto-detects **Podman** when `docker` isn't on the node (or set `CONTAINER_TOOL=podman`).
+
+```bash
+cd operator
+IMG=rancher-audit-log-operator:0.1.1 PLATFORM=linux/amd64 ./build-image.sh
+podman tag rancher-audit-log-operator:0.1.1 registry.internal/rancher-audit/rancher-audit-log-operator:0.1.1
+podman push registry.internal/rancher-audit/rancher-audit-log-operator:0.1.1
+```
+
+> Make sure the node has the repo **including `operator/vendor/`** (re-pull/re-copy if you
+> uploaded before it was added). If you change `operator/go.mod`, re-run `go mod vendor` on a
+> connected machine and commit the result.
+
 ## Manual path: mirror images & install the chart yourself
 
 ## Images to mirror

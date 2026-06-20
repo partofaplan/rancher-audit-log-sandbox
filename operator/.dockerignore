@@ -3,3 +3,6 @@
 # Dockerfile copies in (produced by ./build-image.sh).
 bin/*
 !bin/manager-linux-*
+# vendor/ is for offline `go build`; the Dockerfile only copies the prebuilt binary, so it
+# isn't needed in the build context.
+vendor/
