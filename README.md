@@ -58,7 +58,8 @@ team. The production path is the Helm chart + the two handoff packages below.
   the Kibana dashboard bundle, and [ELK-INTEGRATION.md](elk-integration/ELK-INTEGRATION.md).
 - `docs/` — [usage.md](docs/usage.md) (sandbox walkthrough),
   [air-gap.md](docs/air-gap.md) (mirror images + chart install),
-  [enable-rancher-audit.md](docs/enable-rancher-audit.md) (turn on Rancher auditing).
+  [enable-rancher-audit.md](docs/enable-rancher-audit.md) (turn on Rancher auditing),
+  [testing-without-elk.md](docs/testing-without-elk.md) (verify the operator before ELK exists).
 - `scripts/build-airgap-bundle.sh` + `.github/workflows/airgap-bundle.yml` — build a single
   downloadable air-gap tarball (images + chart + handoff + docs), attached to GitHub Releases.
 - `bilbo/` — **local sandbox only**: a throwaway Elasticsearch+Kibana on k3d plus an install
