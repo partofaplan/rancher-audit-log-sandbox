@@ -114,8 +114,23 @@ references above are all this operator adds.)
 
 ## Install the chart
 
-Load `charts/rancher-audit-log-operator` into your internal Helm/chart repo (or install the
-directory directly), then:
+**First create the ES credential/cert secrets** in the release namespace — any secret you
+reference (`auth.existingSecret`, `tls.existingCASecret`, `tls.clientCertSecret`) must exist
+*before* the shipper pods schedule, or they get stuck in `ContainerCreating` with
+`MountVolume.SetUp failed ... secret "<name>" not found`:
+
+```bash
+kubectl create namespace rancher-audit-system
+# CA bundle to verify the ES server cert (key MUST be ca.crt):
+kubectl -n rancher-audit-system create secret generic es-ca --from-file=ca.crt=/path/to/ca.crt
+# mutual-TLS client cert/key (if your ES authenticates by certificate):
+kubectl -n rancher-audit-system create secret tls es-client-cert --cert=client.crt --key=client.key
+# OR basic auth (keys username/password):
+# kubectl -n rancher-audit-system create secret generic es-creds --from-literal=username=… --from-literal=password=…
+```
+
+Then load `charts/rancher-audit-log-operator` into your internal Helm/chart repo (or install
+the directory directly):
 
 ```bash
 helm install rancher-audit charts/rancher-audit-log-operator \
@@ -123,8 +138,9 @@ helm install rancher-audit charts/rancher-audit-log-operator \
   --set image.registry=registry.internal/rancher-audit \
   --set imagePullSecrets[0].name=internal-registry \
   --set elasticsearch.host=https://es.corp.example:9200 \
-  --set elasticsearch.auth.existingSecret=es-creds \
-  --set elasticsearch.tls.existingCASecret=es-ca
+  --set elasticsearch.protocol=https \
+  --set elasticsearch.tls.existingCASecret=es-ca \
+  --set elasticsearch.tls.clientCertSecret=es-client-cert
 ```
 
 `image.registry` prefixes **both** images. Set `imagePullSecrets` if the registry requires
