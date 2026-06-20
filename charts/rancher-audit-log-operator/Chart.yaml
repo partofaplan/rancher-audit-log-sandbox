@@ -6,14 +6,14 @@ description: |
   Rancher audit-log sidecar and ships enriched audit events to Elasticsearch. Designed for
   air-gapped Rancher clusters with an internal image/chart registry.
 type: application
-version: 0.1.1
-appVersion: "0.1.1"
+version: 0.1.2
+appVersion: "0.1.2"
 keywords:
   - rancher
   - audit
   - elasticsearch
   - elk
   - filebeat
-home: https://github.com/zachperkins/rancher-audit-log-sandbox
+home: https://github.com/partofaplan/rancher-audit-log-sandbox
 maintainers:
   - name: Zach Perkins
