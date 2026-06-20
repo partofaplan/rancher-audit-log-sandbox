@@ -59,6 +59,8 @@ team. The production path is the Helm chart + the two handoff packages below.
 - `docs/` — [usage.md](docs/usage.md) (sandbox walkthrough),
   [air-gap.md](docs/air-gap.md) (mirror images + chart install),
   [enable-rancher-audit.md](docs/enable-rancher-audit.md) (turn on Rancher auditing).
+- `scripts/build-airgap-bundle.sh` + `.github/workflows/airgap-bundle.yml` — build a single
+  downloadable air-gap tarball (images + chart + handoff + docs), attached to GitHub Releases.
 - `bilbo/` — **local sandbox only**: a throwaway Elasticsearch+Kibana on k3d plus an install
   script. Not used in production (the real ELK is external).
 
@@ -99,10 +101,16 @@ In production this splits across **two teams**, with a small contract between th
 
 ### Your side — deploy the operator (air-gapped)
 
-The operator is a ~17 MB `scratch` image (static, cross-compiled binary), so it's just
-load-and-push. Mirror **two** images into your internal registry — the operator and the
-Filebeat shipper — then install the chart with a single registry prefix. Full steps:
-[docs/air-gap.md](docs/air-gap.md). In short:
+**Easiest:** download the prebuilt bundle from the GitHub Release
+(`rancher-audit-log-airgap-<version>.tar.gz`, produced by the
+[air-gap-bundle workflow](.github/workflows/airgap-bundle.yml)) — it contains both images, the
+chart, the ELK handoff, and `load-images.sh`/`install` scripts. Carry it in, run
+`./load-images.sh <registry>`, edit `values-example.yaml`, `helm install`. See
+[docs/air-gap.md](docs/air-gap.md).
+
+Or do it by hand: the operator is a ~17 MB `scratch` image (static, cross-compiled binary), so
+it's just load-and-push. Mirror **two** images into your internal registry — the operator and
+the Filebeat shipper — then install the chart with a single registry prefix. In short:
 
 ```bash
 cd operator && IMG=rancher-audit-log-operator:0.1.0 PLATFORM=linux/amd64 ./build-image.sh

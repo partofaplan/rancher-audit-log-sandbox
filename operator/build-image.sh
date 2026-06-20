@@ -18,8 +18,11 @@ IMG="${IMG:-rancher-audit-log-operator:0.1.0}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 DC=(); [ -n "${DOCKER_CONTEXT:-}" ] && DC=(--context "${DOCKER_CONTEXT}")
 
-# Use the local module cache as a file proxy so the build works offline.
-export GOPROXY="file://$(go env GOMODCACHE)/cache/download" GOSUMDB=off GOFLAGS=-mod=mod
+# Default to the local module cache as a file proxy so the build works offline; a caller
+# (e.g. CI with network) can override GOPROXY/GOSUMDB/GOFLAGS via the environment.
+export GOPROXY="${GOPROXY:-file://$(go env GOMODCACHE)/cache/download}"
+export GOSUMDB="${GOSUMDB:-off}"
+export GOFLAGS="${GOFLAGS:--mod=mod}"
 
 mkdir -p bin
 for plat in ${PLATFORM//,/ }; do
@@ -33,10 +36,11 @@ if [[ "${PLATFORM}" == *,* || "${PUSH:-}" == "1" ]]; then
   # multi-platform and/or push -> buildx
   echo ">> buildx build ${PLATFORM} -t ${IMG} (push=${PUSH:-0})"
   docker ${DC[@]+"${DC[@]}"} buildx build --platform "${PLATFORM}" -t "${IMG}" \
+    --provenance=false --sbom=false \
     $([ "${PUSH:-}" == "1" ] && echo --push || echo --load) .
 else
   echo ">> docker build ${PLATFORM} -t ${IMG}"
-  docker ${DC[@]+"${DC[@]}"} build --platform "${PLATFORM}" -t "${IMG}" .
+  docker ${DC[@]+"${DC[@]}"} build --platform "${PLATFORM}" --provenance=false --sbom=false -t "${IMG}" .
 fi
 
 echo ">> Built ${IMG} (${PLATFORM})"

@@ -4,6 +4,40 @@ The operator runs in an air-gapped Rancher cluster that pulls only from an **int
 registry**. Two images must be mirrored there, then the Helm chart is pointed at that registry
 with a single `image.registry` prefix.
 
+## Easiest path: download the prebuilt bundle from a GitHub Release
+
+The [`air-gap-bundle` workflow](../.github/workflows/airgap-bundle.yml) builds a single
+self-contained tarball and attaches it to the GitHub Release for each `v*` tag (you can also
+run it manually from the Actions tab and download the artifact). Grab
+`rancher-audit-log-airgap-<version>.tar.gz` and carry it into the air gap; it contains:
+
+```
+images/            operator + Filebeat images (linux/amd64 tarballs) + images.txt
+load-images.sh     load + retag + push both images to your registry
+chart/             the Helm chart (.tgz)
+values-example.yaml
+elk-integration/   the ELK-team handoff package
+docs/              this file + enable-rancher-audit.md
+README.md
+```
+
+Inside the air gap:
+
+```bash
+tar xzf rancher-audit-log-airgap-<version>.tar.gz && cd rancher-audit-log-airgap-<version>
+./load-images.sh registry.internal/rancher-audit        # load + push both images
+# edit values-example.yaml (registry + the ELK team's endpoint/creds), then:
+helm install rancher-audit chart/rancher-audit-log-operator-<version>.tgz \
+  -n rancher-audit-system --create-namespace -f values-example.yaml
+```
+
+To build the bundle yourself on a connected machine:
+`./scripts/build-airgap-bundle.sh` (→ `dist/`). Prefer an **amd64** host or have `skopeo`
+installed — saving the amd64 Filebeat image via `docker save` on an arm64 Docker Desktop fails
+(use `skopeo`, the GitHub workflow, or `INCLUDE_FILEBEAT=0` to mirror Filebeat separately).
+
+## Manual path: mirror images & install the chart yourself
+
 ## Images to mirror
 
 | Image | Source | Notes |
