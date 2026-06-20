@@ -16,16 +16,28 @@ spec:
     pathPrefix: {{ . | quote }}
     {{- end }}
     index: {{ .Values.elasticsearch.index | quote }}
+    {{- with .Values.elasticsearch.protocol }}
+    protocol: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.elasticsearch.preset }}
+    preset: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.elasticsearch.pipeline }}
+    pipeline: {{ . | quote }}
+    {{- end }}
     {{- if or .Values.elasticsearch.auth.existingSecret .Values.elasticsearch.auth.username }}
     basicAuthSecretRef: {{ include "operator.authSecretName" . }}
     {{- end }}
-    {{- if or .Values.elasticsearch.tls.insecureSkipVerify .Values.elasticsearch.tls.existingCASecret .Values.elasticsearch.tls.caCert }}
+    {{- if or .Values.elasticsearch.tls.insecureSkipVerify .Values.elasticsearch.tls.existingCASecret .Values.elasticsearch.tls.caCert .Values.elasticsearch.tls.clientCertSecret }}
     tls:
       {{- if .Values.elasticsearch.tls.insecureSkipVerify }}
       insecureSkipVerify: true
       {{- end }}
       {{- if or .Values.elasticsearch.tls.existingCASecret .Values.elasticsearch.tls.caCert }}
       caSecretRef: {{ include "operator.caSecretName" . }}
+      {{- end }}
+      {{- with .Values.elasticsearch.tls.clientCertSecret }}
+      clientCertSecretRef: {{ . | quote }}
       {{- end }}
     {{- end }}
   source:

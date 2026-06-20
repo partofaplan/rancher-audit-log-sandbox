@@ -75,6 +75,24 @@ spec:
                       PathPrefix is the base path when ES sits behind a reverse proxy, e.g. /es
                       (bilbo exposes ES under a stripped /es prefix). Optional.
                     type: string
+                  pipeline:
+                    description: |-
+                      Pipeline is the name of an Elasticsearch ingest pipeline to route events through.
+                      Optional.
+                    type: string
+                  preset:
+                    description: |-
+                      Preset is a Filebeat Elasticsearch output performance preset (e.g. "balanced",
+                      "throughput", "scale", "latency"). Optional.
+                    type: string
+                  protocol:
+                    description: |-
+                      Protocol overrides the scheme used to reach Elasticsearch ("http" or "https").
+                      Optional — by default it is inferred from the host URL scheme.
+                    enum:
+                    - http
+                    - https
+                    type: string
                   tls:
                     description: |-
                       TLS configures HTTPS to Elasticsearch (for an existing/secured ELK). Optional;
@@ -84,6 +102,12 @@ spec:
                         description: |-
                           CASecretRef names a Secret (same namespace as the CR) with a "ca.crt" key holding
                           the CA bundle to trust. Mounted into the shipper and used to verify Elasticsearch.
+                        type: string
+                      clientCertSecretRef:
+                        description: |-
+                          ClientCertSecretRef names a TLS Secret (same namespace as the CR) with "tls.crt" and
+                          "tls.key" for mutual-TLS (client certificate) authentication to Elasticsearch. Used
+                          when the ELK stack authenticates clients by certificate rather than basic auth.
                         type: string
                       insecureSkipVerify:
                         description: |-

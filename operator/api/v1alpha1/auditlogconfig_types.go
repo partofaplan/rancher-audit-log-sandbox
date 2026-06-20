@@ -64,6 +64,22 @@ type ElasticsearchSpec struct {
 	// +optional
 	BasicAuthSecretRef string `json:"basicAuthSecretRef,omitempty"`
 
+	// Protocol overrides the scheme used to reach Elasticsearch ("http" or "https").
+	// Optional — by default it is inferred from the host URL scheme.
+	// +optional
+	// +kubebuilder:validation:Enum=http;https
+	Protocol string `json:"protocol,omitempty"`
+
+	// Preset is a Filebeat Elasticsearch output performance preset (e.g. "balanced",
+	// "throughput", "scale", "latency"). Optional.
+	// +optional
+	Preset string `json:"preset,omitempty"`
+
+	// Pipeline is the name of an Elasticsearch ingest pipeline to route events through.
+	// Optional.
+	// +optional
+	Pipeline string `json:"pipeline,omitempty"`
+
 	// TLS configures HTTPS to Elasticsearch (for an existing/secured ELK). Optional;
 	// with a publicly-trusted cert no TLS config is needed.
 	// +optional
@@ -81,6 +97,12 @@ type ElasticsearchTLS struct {
 	// the CA bundle to trust. Mounted into the shipper and used to verify Elasticsearch.
 	// +optional
 	CASecretRef string `json:"caSecretRef,omitempty"`
+
+	// ClientCertSecretRef names a TLS Secret (same namespace as the CR) with "tls.crt" and
+	// "tls.key" for mutual-TLS (client certificate) authentication to Elasticsearch. Used
+	// when the ELK stack authenticates clients by certificate rather than basic auth.
+	// +optional
+	ClientCertSecretRef string `json:"clientCertSecretRef,omitempty"`
 }
 
 // SourceSpec selects the audit-log source pods/container.

@@ -19,7 +19,6 @@ package controller
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"sort"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -38,6 +37,7 @@ const (
 	defaultFilebeatImage   = "docker.elastic.co/beats/filebeat:8.17.3"
 	defaultIndex           = "rancher-audit"
 	caMountPath            = "/etc/filebeat-ca"
+	clientCertMountPath    = "/etc/filebeat-certs"
 )
 
 // auditScriptJS runs in Filebeat's javascript processor. It derives, from the
@@ -146,15 +146,11 @@ func selectorLabels(cr *rancherauditv1alpha1.AuditLogConfig) map[string]string {
 func buildFilebeatConfig(cr *rancherauditv1alpha1.AuditLogConfig) (string, error) {
 	es := cr.Spec.Elasticsearch
 
-	conds := []interface{}{
-		map[string]interface{}{"equals": map[string]interface{}{"kubernetes.namespace": cr.Spec.Source.Namespace}},
-		map[string]interface{}{"equals": map[string]interface{}{"kubernetes.container.name": cr.Spec.Source.Container}},
-	}
-	for _, k := range sortedKeys(cr.Spec.Source.PodSelector) {
-		conds = append(conds, map[string]interface{}{
-			"equals": map[string]interface{}{"kubernetes.labels." + k: cr.Spec.Source.PodSelector[k]},
-		})
-	}
+	src := cr.Spec.Source
+	// Kubernetes writes container logs as /var/log/containers/<pod>_<ns>_<container>-<id>.log.
+	// This glob targets exactly the Rancher audit-log sidecar — no kube-API autodiscover, so
+	// the shipper needs no cluster RBAC and works on locked-down/air-gapped clusters.
+	logGlob := "/var/log/containers/*_" + src.Namespace + "_" + src.Container + "-*.log"
 
 	esOut := map[string]interface{}{
 		"hosts": []string{es.Host},
@@ -162,6 +158,15 @@ func buildFilebeatConfig(cr *rancherauditv1alpha1.AuditLogConfig) (string, error
 	}
 	if es.PathPrefix != "" {
 		esOut["path"] = es.PathPrefix
+	}
+	if es.Protocol != "" {
+		esOut["protocol"] = es.Protocol
+	}
+	if es.Preset != "" {
+		esOut["preset"] = es.Preset
+	}
+	if es.Pipeline != "" {
+		esOut["pipeline"] = es.Pipeline
 	}
 	if es.BasicAuthSecretRef != "" {
 		esOut["username"] = "${ES_USERNAME}"
@@ -175,28 +180,25 @@ func buildFilebeatConfig(cr *rancherauditv1alpha1.AuditLogConfig) (string, error
 		if es.TLS.CASecretRef != "" {
 			ssl["certificate_authorities"] = []string{caMountPath + "/ca.crt"}
 		}
+		if es.TLS.ClientCertSecretRef != "" {
+			ssl["certificate"] = clientCertMountPath + "/tls.crt"
+			ssl["key"] = clientCertMountPath + "/tls.key"
+		}
 		if len(ssl) > 0 {
 			esOut["ssl"] = ssl
 		}
 	}
 
 	cfg := map[string]interface{}{
-		"filebeat.autodiscover": map[string]interface{}{
-			"providers": []interface{}{
-				map[string]interface{}{
-					"type": "kubernetes",
-					"node": "${NODE_NAME}",
-					"templates": []interface{}{
-						map[string]interface{}{
-							"condition": map[string]interface{}{"and": conds},
-							"config": []interface{}{
-								map[string]interface{}{
-									"type":  "container",
-									"paths": []string{"/var/log/containers/*-${data.kubernetes.container.id}.log"},
-								},
-							},
-						},
-					},
+		"filebeat.inputs": []interface{}{
+			map[string]interface{}{
+				"type":                        "filestream",
+				"id":                          "rancher-audit",
+				"paths":                       []string{logGlob},
+				"prospector.scanner.symlinks": true,
+				// The container parser unwraps the docker/CRI log envelope into `message`.
+				"parsers": []interface{}{
+					map[string]interface{}{"container": map[string]interface{}{"stream": "all", "format": "auto"}},
 				},
 			},
 		},
@@ -225,15 +227,6 @@ func buildFilebeatConfig(cr *rancherauditv1alpha1.AuditLogConfig) (string, error
 		return "", err
 	}
 	return string(b), nil
-}
-
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // configHash is a short content hash of the Filebeat config, used to roll the

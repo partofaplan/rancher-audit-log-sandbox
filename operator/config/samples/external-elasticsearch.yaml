@@ -1,19 +1,30 @@
 # Plug the operator into an EXISTING (secured) Elasticsearch / ELK stack.
-# Replace the host, credentials, and CA with your stack's real values.
+# Replace the host, credentials/certs, and CA with your stack's real values.
 #
-# TLS options (spec.elasticsearch.tls):
-#   - public/trusted cert  -> omit `tls` entirely
-#   - private CA           -> set `caSecretRef` to a Secret with a `ca.crt` key
-#   - skip verification    -> set `insecureSkipVerify: true` (sandbox/self-signed only)
+# Auth options (use whichever your ELK requires):
+#   - basic auth      -> elasticsearch.basicAuthSecretRef (Secret: username/password)
+#   - mutual TLS       -> elasticsearch.tls.clientCertSecretRef (TLS Secret: tls.crt/tls.key)
+# TLS server verification:
+#   - public/trusted   -> omit elasticsearch.tls
+#   - private CA       -> elasticsearch.tls.caSecretRef (Secret: ca.crt)
+#   - skip verify      -> elasticsearch.tls.insecureSkipVerify: true (sandbox only)
+#
+# This example uses MUTUAL TLS (client cert) — the common pattern for a hardened ELK.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: elastic-credentials
+  name: elastic-client-cert
   namespace: default
-type: Opaque
+type: kubernetes.io/tls
 stringData:
-  username: elastic
-  password: "CHANGE-ME"
+  tls.crt: |
+    -----BEGIN CERTIFICATE-----
+    REPLACE-WITH-YOUR-CLIENT-CERTIFICATE
+    -----END CERTIFICATE-----
+  tls.key: |
+    -----BEGIN PRIVATE KEY-----
+    REPLACE-WITH-YOUR-CLIENT-KEY
+    -----END PRIVATE KEY-----
 ---
 apiVersion: v1
 kind: Secret
@@ -34,15 +45,16 @@ metadata:
   namespace: default
 spec:
   elasticsearch:
-    host: https://elasticsearch.example.com:9200
+    host: https://elasticsearch.example.com:443
+    protocol: https
     index: rancher-audit
-    basicAuthSecretRef: elastic-credentials
+    preset: balanced                 # optional Filebeat output preset
+    pipeline: filebeat-applog-master  # optional ES ingest pipeline
     tls:
-      caSecretRef: elastic-ca
+      clientCertSecretRef: elastic-client-cert   # mutual-TLS auth
+      caSecretRef: elastic-ca                     # trust the ES server CA
   source:
     namespace: cattle-system
-    podSelector:
-      app: rancher
     container: rancher-audit-log
   filebeat:
     image: docker.elastic.co/beats/filebeat:8.17.3

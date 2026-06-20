@@ -198,13 +198,21 @@ func mutateDaemonSet(cr *rancherauditv1alpha1.AuditLogConfig, saName, cmName, cf
 		)
 	}
 
-	// Mount a CA bundle for verifying an existing/secured Elasticsearch, if configured.
+	// Mount the CA bundle and/or client cert for an existing/secured Elasticsearch.
 	caVolumes := []corev1.Volume{}
-	if tls := cr.Spec.Elasticsearch.TLS; tls != nil && tls.CASecretRef != "" {
-		container.VolumeMounts = append(container.VolumeMounts,
-			corev1.VolumeMount{Name: "es-ca", MountPath: caMountPath, ReadOnly: true})
-		caVolumes = append(caVolumes, corev1.Volume{Name: "es-ca", VolumeSource: corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{SecretName: tls.CASecretRef}}})
+	if tls := cr.Spec.Elasticsearch.TLS; tls != nil {
+		if tls.CASecretRef != "" {
+			container.VolumeMounts = append(container.VolumeMounts,
+				corev1.VolumeMount{Name: "es-ca", MountPath: caMountPath, ReadOnly: true})
+			caVolumes = append(caVolumes, corev1.Volume{Name: "es-ca", VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: tls.CASecretRef}}})
+		}
+		if tls.ClientCertSecretRef != "" {
+			container.VolumeMounts = append(container.VolumeMounts,
+				corev1.VolumeMount{Name: "es-client-cert", MountPath: clientCertMountPath, ReadOnly: true})
+			caVolumes = append(caVolumes, corev1.Volume{Name: "es-client-cert", VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: tls.ClientCertSecretRef}}})
+		}
 	}
 
 	ds.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels(cr)}

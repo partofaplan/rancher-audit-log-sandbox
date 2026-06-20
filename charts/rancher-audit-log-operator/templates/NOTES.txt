@@ -10,6 +10,23 @@ Check status:
   kubectl -n {{ .Release.Namespace }} get auditlogconfig {{ .Values.auditLogConfig.name }}
   kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Values.auditLogConfig.name }}
   kubectl -n {{ .Release.Namespace }} logs ds/audit-shipper-{{ .Values.auditLogConfig.name }} | grep "Harvester started"
+{{- if or .Values.elasticsearch.auth.existingSecret .Values.elasticsearch.tls.existingCASecret .Values.elasticsearch.tls.clientCertSecret }}
+
+!! REQUIRED SECRETS — create these in namespace "{{ .Release.Namespace }}" or the shipper pods
+   stay in ContainerCreating with: MountVolume.SetUp failed ... secret "<name>" not found
+{{- with .Values.elasticsearch.auth.existingSecret }}
+   - {{ . }}   (keys: username, password)
+       kubectl -n {{ $.Release.Namespace }} create secret generic {{ . }} --from-literal=username=… --from-literal=password=…
+{{- end }}
+{{- with .Values.elasticsearch.tls.existingCASecret }}
+   - {{ . }}   (key: ca.crt)
+       kubectl -n {{ $.Release.Namespace }} create secret generic {{ . }} --from-file=ca.crt=/path/to/ca.crt
+{{- end }}
+{{- with .Values.elasticsearch.tls.clientCertSecret }}
+   - {{ . }}   (TLS secret: tls.crt, tls.key)
+       kubectl -n {{ $.Release.Namespace }} create secret tls {{ . }} --cert=/path/to/client.crt --key=/path/to/client.key
+{{- end }}
+{{- end }}
 {{- else }}
 auditLogConfig.create=false — create an AuditLogConfig yourself to start shipping.
 {{- end }}

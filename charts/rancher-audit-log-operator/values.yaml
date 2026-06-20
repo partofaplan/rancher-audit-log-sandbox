@@ -7,7 +7,7 @@ image:
   registry: ""
   # Operator image (built from this repo via operator/build-image.sh)
   repository: rancher-audit-log-operator
-  tag: "0.1.0"
+  tag: "0.1.2"
   pullPolicy: IfNotPresent
 
 # Filebeat shipper image, reconciled into the AuditLogConfig. Path is appended to
@@ -44,14 +44,18 @@ elasticsearch:
   host: ""              # REQUIRED, e.g. https://elasticsearch.example.com:9200
   pathPrefix: ""        # e.g. /es when ES sits behind a path-based reverse proxy
   index: rancher-audit
-  auth:
+  protocol: ""          # "http" | "https" (optional; inferred from host scheme)
+  preset: ""            # Filebeat output preset, e.g. "balanced" (optional)
+  pipeline: ""          # Elasticsearch ingest pipeline name (optional)
+  auth:                 # basic auth (omit if your ES uses client-cert / mutual TLS)
     existingSecret: ""  # name of a Secret with keys username/password (preferred)
     username: ""        # OR inline creds — the chart will create the Secret
     password: ""
   tls:
     insecureSkipVerify: false
-    existingCASecret: ""  # name of a Secret with key ca.crt
-    caCert: ""            # OR inline PEM — the chart will create the Secret
+    existingCASecret: ""        # name of a Secret with key ca.crt
+    caCert: ""                  # OR inline PEM — the chart will create the Secret
+    clientCertSecret: ""        # name of a TLS Secret (tls.crt/tls.key) for mutual-TLS auth
 
 # ── AuditLogConfig CR ─────────────────────────────────────────────────────────────────────
 # Create the CR as part of the release. Set create=false to manage it out-of-band.
