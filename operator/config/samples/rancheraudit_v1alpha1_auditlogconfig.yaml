@@ -5,13 +5,14 @@ metadata:
   namespace: default
 spec:
   elasticsearch:
-    # bilbo's Elasticsearch, fronted by Traefik on the Mac host under a stripped /es prefix.
-    # 192.168.5.2 is the rancher-desktop (lima) host gateway; 192.168.64.1 also works.
-    # NOTE: include the port — Filebeat defaults to :9200 if it's omitted, but bilbo's
-    # Traefik (which fronts ES under /es) listens on :80.
-    host: http://192.168.5.2:80
-    pathPrefix: /es
+    # bilbo's Elasticsearch, reached DIRECTLY on its NodePort published at the Mac host :9200
+    # (k3d `--port-add 9200:30920@loadbalancer`). Do NOT use :80 / the /es Traefik route here:
+    # from a rancher-desktop pod, :80 on every host IP is rancher-desktop's OWN Traefik, not
+    # bilbo's. 192.168.64.1 is the Mac's gateway on the rancher-desktop vmnet (192.168.5.2 also
+    # works); confirm with a probe pod if these differ on your machine.
+    host: http://192.168.64.1:9200
     index: rancher-audit
+  # no pathPrefix — we hit Elasticsearch directly, not through a proxy.
   # source defaults to a standard Rancher Manager install; shown here for clarity.
   source:
     namespace: cattle-system

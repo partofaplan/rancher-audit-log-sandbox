@@ -19,7 +19,7 @@ rancher-desktop (lima VM)                         bilbo / k3d-bilbo (Docker Desk
 │ AuditLogConfig CR (rancheraudit.io)│  │ tails node │   /es  ·  kibana.localhost     │
 │ operator → Filebeat DaemonSet ────┼──┘ logs,      └───────────────────────────────┘
 └──────────────────────────────────┘    parses JSON, builds the sentence, ships →
-                                         http://192.168.5.2:80/es  (index: rancher-audit)
+                                         http://192.168.64.1:9200  (ES NodePort; index: rancher-audit)
 ```
 
 Each audit entry is enriched at ingest into `audit.*` fields, including an
@@ -82,7 +82,7 @@ cd operator && ./build-image.sh \
   && IMG=rancher-audit-log-operator:0.1.0 PLATFORM=linux/arm64 DOCKER_CONTEXT=rancher-desktop ./build-image.sh
 helm --kube-context rancher-desktop install rancher-audit charts/rancher-audit-log-operator \
   -n rancher-audit-system --create-namespace \
-  --set elasticsearch.host=http://192.168.5.2:80 --set elasticsearch.pathPrefix=/es
+  --set elasticsearch.host=http://192.168.64.1:9200   # ES NodePort on the Mac host (see docs/usage.md)
 # (for quick controller-only dev: kubectl apply -f operator/config/crd/bases && cd operator && make run)
 ```
 

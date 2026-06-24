@@ -20,6 +20,16 @@ kubectl --context "${CONTEXT}" apply -f "${HERE}/elk/elasticsearch.yaml"
 kubectl --context "${CONTEXT}" apply -f "${HERE}/elk/kibana.yaml"
 kubectl --context "${CONTEXT}" apply -f "${HERE}/elk/ingress.yaml"
 
+echo ">> Publishing ES on the Mac host :9200 via the k3d loadbalancer (for cross-cluster Filebeat)"
+# :80 can't be used from the rancher-desktop cluster (it hits rancher-desktop's own Traefik),
+# so ES is reached directly on a non-:80 host port. Idempotent.
+K3D_CLUSTER="${K3D_CLUSTER:-bilbo}"
+if docker port "k3d-${K3D_CLUSTER}-serverlb" 2>/dev/null | grep -q ':9200'; then
+  echo "   :9200 already published"
+else
+  k3d cluster edit "${K3D_CLUSTER}" --port-add "9200:30920@loadbalancer" && echo "   added :9200 -> nodeport 30920"
+fi
+
 echo ">> Waiting for Elasticsearch..."
 kubectl --context "${CONTEXT}" -n "${NS}" rollout status deploy/elasticsearch --timeout=300s
 echo ">> Waiting for Kibana (first boot can take a couple minutes)..."

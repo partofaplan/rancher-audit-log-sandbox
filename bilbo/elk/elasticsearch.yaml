@@ -65,3 +65,21 @@ spec:
   selector: { app: elasticsearch }
   ports:
     - { name: http, port: 9200, targetPort: 9200 }
+---
+# NodePort so the rancher-desktop cluster can reach ES directly on a NON-:80 host port.
+# (:80 can't be used cross-cluster — from a rancher-desktop pod, :80 on every host IP is
+# rancher-desktop's OWN Traefik, not bilbo's.) Published to the Mac host via the k3d
+# loadbalancer: `k3d cluster edit bilbo --port-add "9200:30920@loadbalancer"` (install.sh
+# does this). Reachable from a rancher-desktop pod at http://<host-gateway>:9200 — no Traefik,
+# no /es prefix. Filebeat ships straight here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-ext
+  namespace: monitoring
+  labels: { app: elasticsearch }
+spec:
+  type: NodePort
+  selector: { app: elasticsearch }
+  ports:
+    - { name: http, port: 9200, targetPort: 9200, nodePort: 30920 }

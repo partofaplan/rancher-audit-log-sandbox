@@ -96,21 +96,30 @@ Key spec fields (`operator/config/samples/...yaml`):
 
 | field | meaning | default |
 |-------|---------|---------|
-| `spec.elasticsearch.host` | ES endpoint reachable from the shipper, **with port** | — (e.g. `http://192.168.5.2:80`) |
-| `spec.elasticsearch.pathPrefix` | base path when ES is behind a proxy | unset (use `/es` for bilbo) |
+| `spec.elasticsearch.host` | ES endpoint reachable **from inside a shipper pod**, with port | — (sandbox: `http://192.168.64.1:9200`, the ES NodePort on the Mac host) |
+| `spec.elasticsearch.pathPrefix` | base path when ES is behind a proxy | unset (direct to ES → leave empty) |
 | `spec.elasticsearch.index` | target index | `rancher-audit` |
 | `spec.elasticsearch.basicAuthSecretRef` | Secret (keys `username`/`password`) | unset |
 | `spec.elasticsearch.tls.caSecretRef` / `.insecureSkipVerify` | trust a private CA (Secret with `ca.crt`) / skip verification — for an existing HTTPS ELK | unset (public CA needs neither) |
 | `spec.source.namespace` / `podSelector` / `container` | what to tail | `cattle-system` / `app=rancher` / `rancher-audit-log` |
 | `spec.filebeat.image` | shipper image | `docker.elastic.co/beats/filebeat:8.17.3` |
 
-> **Gotchas (both verified the hard way):**
-> - Put the **port** in `host` — Filebeat defaults to `:9200`, but bilbo's Traefik is on `:80`.
+> **Cross-cluster networking (sandbox gotchas, verified the hard way):**
+> - **Don't use `:80` / the `/es` Traefik route from rancher-desktop.** Both local clusters
+>   run Traefik on `:80`; from inside a rancher-desktop pod, `:80` on *every* host IP resolves
+>   to rancher-desktop's **own** Traefik (returns 404 for `/es`), never bilbo's. The `/es`
+>   ingress only works from the Mac itself (`curl localhost/es/...`).
+> - **Reach bilbo's ES directly on its NodePort published at the Mac host `:9200`** (a
+>   non-colliding port): `install.sh` runs `k3d cluster edit bilbo --port-add "9200:30920@loadbalancer"`.
+>   Set `spec.elasticsearch.host=http://192.168.64.1:9200`, no `pathPrefix`. Verify from a pod:
+>   `kubectl --context rancher-desktop run probe --rm -it --image=curlimages/curl -- sh -c 'curl -s -o /dev/null -w "%{http_code}\n" http://192.168.64.1:9200/_cluster/health'`  → `200`.
+>   (`192.168.64.1` is the Mac's gateway on the rancher-desktop vmnet; `192.168.5.2` works too. These can change across reboots — re-probe if it breaks.)
+> - **Don't edit the `AuditLogConfig` host in the Rancher UI if you manage it with Helm.** The
+>   UI applies with field-manager `rancher` and takes Server-Side-Apply ownership of the field,
+>   which then blocks `helm upgrade` with a conflict (`conflict with "rancher" … .spec.elasticsearch.host`).
+>   Change it via Helm values (or `helm upgrade --force` once to reclaim ownership).
 > - The rancher-desktop node runs **dockerd**, so `/var/log/pods/.../0.log` symlinks into
 >   `/var/lib/docker/containers`; the DaemonSet mounts that path so Filebeat can follow them.
-> - Cross-VM: from a rancher-desktop pod, bilbo is reached via the Mac host gateway
->   `192.168.5.2` (or `192.168.64.1`). Probe with:
->   `kubectl --context rancher-desktop run probe --rm -it --image=curlimages/curl -- sh -c 'curl -s -o /dev/null -w "%{http_code}\n" http://192.168.5.2:80/es/_cluster/health'`
 
 ## 5. Verify in Kibana
 
